@@ -1,0 +1,5 @@
+# Runtime: everything needed to build the workspace and run the simulator + pretrained policy.
+# Install inside the venv (see README). Training needs requirements-train.txt as well.
+numpy<2                    # ROS 2 Jazzy message packages are built against NumPy 1.x
+mujoco==3.13.0             # the version the shipped policy was trained with
+pyyaml

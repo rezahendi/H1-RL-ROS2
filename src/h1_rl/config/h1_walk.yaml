@@ -1,0 +1,185 @@
+# =============================================================================
+#  Unitree H1 - velocity-tracking walking policy
+#  Single source of truth for training (h1_rl.train), the MuJoCo ROS 2 simulator
+#  node and the RL policy controller node. The exported policy file also embeds
+#  the parts the controller needs, so a trained policy always runs with the
+#  settings it was trained with.
+# =============================================================================
+
+robot:
+  # 19 actuated joints, in MuJoCo actuator order (= order used everywhere).
+  joint_names:
+    - left_hip_yaw_joint
+    - left_hip_roll_joint
+    - left_hip_pitch_joint
+    - left_knee_joint
+    - left_ankle_joint
+    - right_hip_yaw_joint
+    - right_hip_roll_joint
+    - right_hip_pitch_joint
+    - right_knee_joint
+    - right_ankle_joint
+    - torso_joint
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+
+  # The policy drives the 10 leg joints; torso and arms are held at their
+  # default angle by the PD controllers.
+  policy_joints:
+    - left_hip_yaw_joint
+    - left_hip_roll_joint
+    - left_hip_pitch_joint
+    - left_knee_joint
+    - left_ankle_joint
+    - right_hip_yaw_joint
+    - right_hip_roll_joint
+    - right_hip_pitch_joint
+    - right_knee_joint
+    - right_ankle_joint
+
+  # Values below are matched by substring against the joint names
+  # (first match wins, so put specific keys like "shoulder_yaw" first).
+  default_joint_pos:        # [rad] nominal standing pose
+    hip_pitch: -0.1
+    knee: 0.3
+    ankle: -0.2
+    "": 0.0                 # everything else
+  kp:                       # [Nm/rad] PD stiffness (Unitree's H1 RL gains)
+    hip: 150.0
+    knee: 200.0
+    ankle: 40.0
+    torso: 300.0
+    shoulder: 150.0
+    elbow: 100.0
+  kd:                       # [Nm s/rad] PD damping
+    hip: 2.0
+    knee: 4.0
+    ankle: 2.0
+    torso: 6.0
+    shoulder: 2.0
+    elbow: 2.0
+  torque_limit:             # [Nm] motor limits of the H1
+    hip: 200.0
+    knee: 300.0
+    ankle: 40.0
+    torso: 200.0
+    shoulder_yaw: 18.0
+    shoulder: 40.0
+    elbow: 18.0
+
+sim:
+  scene: scene.xml          # inside h1_rl/models/h1
+  timestep: 0.005           # [s] physics step (200 Hz)
+  decimation: 4             # physics steps per policy step -> 50 Hz control
+  integrator: implicitfast
+  iterations: 10
+  ls_iterations: 20
+
+control:
+  action_scale: 0.25        # target = default + reference(gait phase) + action_scale * action
+  action_clip: 10.0
+  residual_reference: true  # policy adds corrections to a stepping-in-place reference motion
+
+observations:
+  history_length: 5         # stacked frames fed to the actor (oldest first)
+  clip: 100.0
+  scales:
+    ang_vel: 0.25
+    dof_pos: 1.0
+    dof_vel: 0.05
+    lin_vel: 2.0            # critic only
+    command: [2.0, 2.0, 0.25]
+  noise:                    # uniform noise amplitude, in physical units
+    ang_vel: 0.2
+    gravity: 0.05
+    dof_pos: 0.01
+    dof_vel: 1.5
+
+gait:
+  period: 0.8               # [s] full stride
+  offset: 0.5               # right leg phase offset
+  stance_ratio: 0.55        # fraction of the cycle a foot should be on the ground
+  swing_height: 0.07        # [m] sole clearance at mid swing
+  ref_amplitude: 0.3        # [rad] hip/ankle bend of the stepping reference (knee: 2x)
+  stand_when_idle: true     # zero command: finish the step, then stand still (clock stops)
+
+commands:
+  lin_vel_x: [-0.6, 1.0]    # [m/s]
+  lin_vel_y: [-0.5, 0.5]    # [m/s]
+  ang_vel_yaw: [-1.0, 1.0]  # [rad/s]
+  zero_prob: 0.25           # chance of a "stand still" command
+  small_cmd_threshold: 0.1  # |v_xy| below this is set to 0 (also applied by the controller)
+  small_yaw_threshold: 0.1  # |yaw rate| below this is set to 0
+  resample_interval_s: [3.0, 6.0]
+  accel_limit: [2.0, 2.0, 4.0]  # [m/s^2, m/s^2, rad/s^2] how fast the command may change
+
+env:
+  episode_length_s: 20.0
+  termination:
+    min_base_height: 0.6    # [m]
+    max_tilt_gravity_xy: 0.7  # |projected gravity xy| (~44 deg)
+
+domain_rand:
+  friction: [0.4, 1.25]
+  added_base_mass: [-1.0, 3.0]    # [kg] on the pelvis
+  com_shift: 0.02                 # [m] +/- shift of the pelvis CoM
+  kp_scale: [0.9, 1.1]
+  kd_scale: [0.9, 1.1]
+  action_delay_steps: [0, 2]      # physics steps (0-10 ms) before a new target applies
+  push_interval_s: [5.0, 10.0]
+  push_vel_xy: 0.4                # [m/s] max velocity kick
+  init_joint_noise: 0.1           # [rad]
+  init_base_vel: 0.2              # [m/s] and [rad/s]
+
+rewards:
+  tracking_sigma: 0.25
+  base_height_target: 1.0
+  soft_dof_pos_limit: 0.9
+  only_positive_rewards: true
+  scales:                   # multiplied by the control dt, like legged_gym
+    tracking_lin_vel: 1.5
+    tracking_ang_vel: 0.75
+    lin_vel_z: -2.0
+    ang_vel_xy: -0.05
+    orientation: -1.0
+    base_height: -10.0
+    dof_acc: -2.5e-7
+    dof_vel: -1.0e-3
+    torques: -5.0e-6
+    action_rate: -0.01
+    dof_pos_limits: -5.0
+    alive: 0.15
+    hip_pos: -1.0
+    contact_no_vel: -0.2
+    feet_swing_height: -20.0
+    contact: 0.4
+    ref_joint_pos: 0.5
+    stand_still: 0.0         # off: penalizing motion while standing prevents balance corrections
+
+ppo:
+  num_envs: 128
+  num_steps_per_env: 32
+  max_iterations: 6000
+  save_interval: 100
+  actor_hidden_dims: [256, 128, 64]
+  critic_hidden_dims: [256, 128, 64]
+  activation: elu
+  init_noise_std: 0.8
+  learning_rate: 1.0e-3
+  schedule: adaptive        # adaptive (KL based) or fixed
+  desired_kl: 0.01
+  gamma: 0.99
+  lam: 0.95
+  clip_param: 0.2
+  entropy_coef: 0.003
+  value_loss_coef: 1.0
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  max_grad_norm: 1.0
+  empirical_normalization: true

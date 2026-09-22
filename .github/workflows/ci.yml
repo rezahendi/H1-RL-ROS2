@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: tests (no ROS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # MuJoCo only builds models here, it never opens a window, so no display is needed.
+      - name: Run the test suite
+        run: pytest -q
+
+      - name: Check the shipped policy still tracks a forward command
+        run: python -m h1_rl.play --headless
+        working-directory: src/h1_rl

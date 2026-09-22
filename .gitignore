@@ -1,0 +1,18 @@
+# colcon
+build/
+install/
+log/
+
+# training output
+logs/
+runs/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# media (the demo clips under docs/ are tracked)
+*.mp4
+!docs/*.mp4

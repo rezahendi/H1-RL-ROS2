@@ -1,0 +1,7 @@
+# Training extras (PyTorch is a ~3 GB download with its CUDA libraries).
+-r requirements.txt
+setuptools>=77.0.3,<80     # torch needs >=77; colcon is happiest below 80
+torch                      # PPO training (CUDA wheel on Linux/WSL, falls back to CPU)
+tensorboard
+imageio[ffmpeg]            # videos from h1_rl.play --video
+pytest
