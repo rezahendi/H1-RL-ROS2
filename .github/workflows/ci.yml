@@ -27,6 +27,6 @@ jobs:
       - name: Run the test suite
         run: pytest -q
 
-      - name: Check the shipped policy still tracks a forward command
-        run: python -m h1_rl.play --headless
+      - name: Evaluate the shipped policy against its published gates
+        run: python -m h1_rl.eval --quick --check --jobs 2 --markdown "$GITHUB_STEP_SUMMARY"
         working-directory: src/h1_rl

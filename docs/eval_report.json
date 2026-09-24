@@ -1,0 +1,562 @@
+{
+  "policy": "policies/h1_walk.npz",
+  "policy_file": "/home/claude/h1_rl_ws/src/h1_rl/policies/h1_walk.npz",
+  "iteration": 9800,
+  "trained": "2026-09-22 19:49:38",
+  "mode": "full",
+  "host": {
+    "platform": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
+    "cpus": 2
+  },
+  "date": "2026-09-24 15:38:23",
+  "suites": {
+    "track": {
+      "segments": [
+        {
+          "command": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            0.001212883352925497,
+            -0.003703129149900068,
+            0.018349983980590446
+          ],
+          "error": [
+            0.001212883352925497,
+            0.003703129149900068,
+            0.018349983980590446
+          ]
+        },
+        {
+          "command": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            0.4690831948200259,
+            -0.029938985798035864,
+            0.0025248158465213085
+          ],
+          "error": [
+            0.030916805179974083,
+            0.029938985798035864,
+            0.0025248158465213085
+          ]
+        },
+        {
+          "command": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            0.8931199849782157,
+            0.006259485966747945,
+            0.0614975771658937
+          ],
+          "error": [
+            0.10688001502178435,
+            0.006259485966747945,
+            0.0614975771658937
+          ]
+        },
+        {
+          "command": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            0.012049296507861528,
+            0.0010223685777235034,
+            0.03627194699437774
+          ],
+          "error": [
+            0.012049296507861528,
+            0.0010223685777235034,
+            0.03627194699437774
+          ]
+        },
+        {
+          "command": [
+            0.0,
+            0.0,
+            0.8
+          ],
+          "achieved": [
+            0.017130235960859205,
+            0.01651971997003525,
+            0.7045299738622817
+          ],
+          "error": [
+            0.017130235960859205,
+            0.01651971997003525,
+            0.09547002613771838
+          ]
+        },
+        {
+          "command": [
+            0.6,
+            0.0,
+            -0.6
+          ],
+          "achieved": [
+            0.5329446801972938,
+            -0.03844879647987139,
+            -0.5330645772674324
+          ],
+          "error": [
+            0.06705531980270618,
+            0.03844879647987139,
+            0.06693542273256758
+          ]
+        },
+        {
+          "command": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            -0.025942029905474274,
+            -0.02002673041499927,
+            -0.03016446497769691
+          ],
+          "error": [
+            0.025942029905474274,
+            0.02002673041499927,
+            0.03016446497769691
+          ]
+        },
+        {
+          "command": [
+            0.0,
+            0.4,
+            0.0
+          ],
+          "achieved": [
+            0.03365467871159014,
+            0.2890313703413257,
+            0.029260102677721476
+          ],
+          "error": [
+            0.03365467871159014,
+            0.11096862965867432,
+            0.029260102677721476
+          ]
+        },
+        {
+          "command": [
+            0.0,
+            -0.4,
+            0.0
+          ],
+          "achieved": [
+            0.01622333505940771,
+            -0.2910632812467195,
+            -0.045399182612200814
+          ],
+          "error": [
+            0.01622333505940771,
+            0.10893671875328054,
+            0.045399182612200814
+          ]
+        },
+        {
+          "command": [
+            -0.5,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            -0.40031221363132835,
+            -0.048166271014415875,
+            0.0418721050253942
+          ],
+          "error": [
+            0.09968778636867165,
+            0.048166271014415875,
+            0.0418721050253942
+          ]
+        },
+        {
+          "command": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "achieved": [
+            0.00733185707865374,
+            0.005455230747147575,
+            0.037113227734837294
+          ],
+          "error": [
+            0.00733185707865374,
+            0.005455230747147575,
+            0.037113227734837294
+          ]
+        }
+      ],
+      "falls": 0,
+      "elapsed_s": 1.1
+    },
+    "stop": {
+      "trials": [
+        {
+          "speed": 0.3,
+          "stop_tick": 200,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 203,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 206,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 209,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 212,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 215,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 218,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 221,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 224,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 227,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 230,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.3,
+          "stop_tick": 233,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 200,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 203,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 206,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 209,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 212,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 215,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 218,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 221,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 224,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 227,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 230,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.5,
+          "stop_tick": 233,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 200,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 203,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 206,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 209,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 212,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 215,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 218,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 221,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 224,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 227,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 230,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 0.7,
+          "stop_tick": 233,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 200,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 203,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 206,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 209,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 212,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 215,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 218,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 221,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 224,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 227,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 230,
+          "fell": false,
+          "still_moving": false
+        },
+        {
+          "speed": 1.0,
+          "stop_tick": 233,
+          "fell": false,
+          "still_moving": false
+        }
+      ],
+      "elapsed_s": 7.1
+    },
+    "stand": {
+      "variants": {
+        "noise": {
+          "robots": 192,
+          "falls": 4,
+          "seconds": 12.0
+        },
+        "random": {
+          "robots": 192,
+          "falls": 0,
+          "seconds": 12.0
+        }
+      },
+      "elapsed_s": 44.6
+    },
+    "push": {
+      "cases": {
+        "standing_0.4": {
+          "survived": 7,
+          "trials": 12
+        },
+        "standing_0.8": {
+          "survived": 3,
+          "trials": 12
+        },
+        "walking_0.4": {
+          "survived": 12,
+          "trials": 12
+        },
+        "walking_0.8": {
+          "survived": 12,
+          "trials": 12
+        }
+      },
+      "elapsed_s": 5.2
+    },
+    "robust": {
+      "robots": 64,
+      "seconds": 20.0,
+      "falls": 8,
+      "elapsed_s": 10.3
+    }
+  },
+  "metrics": {
+    "track/falls": 0.0,
+    "track/err_vx": 0.03800765844999167,
+    "track/err_vy": 0.035404187866439236,
+    "track/err_yaw": 0.04225989598959272,
+    "stop/trials": 48.0,
+    "stop/failures": 0.0,
+    "stop/falls": 0.0,
+    "stop/failure_rate": 0.0,
+    "stand/robots": 192.0,
+    "stand/falls_noise": 4.0,
+    "stand/falls_random": 0.0,
+    "stand/fall_rate_noise": 0.020833333333333332,
+    "stand/fall_rate_random": 0.0,
+    "push/standing_survival_rate": 0.4166666666666667,
+    "push/walking_survival_rate": 1.0,
+    "robust/falls": 8.0,
+    "robust/falls_per_robot_minute": 0.375,
+    "robust/tracking_error_xy": 0.19669961557642507
+  }
+}

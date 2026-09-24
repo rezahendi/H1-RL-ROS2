@@ -196,3 +196,20 @@ def test_sim_clock_is_exact_and_monotonic(cfg):
         if k == 500:
             sim.reset(support=True)  # resets the robot, not the clock
     assert sim.time_ns == 1000 * 5_000_000
+
+
+def test_eval_harness_runs_and_gates(cfg):
+    """The shipped policy must pass its own published gates (quick version of `h1_rl.eval`)."""
+    from h1_rl.config import resolve_path
+    from h1_rl.eval import check_gates, render_markdown, run_suites
+
+    try:
+        path = resolve_path("policies/h1_walk.npz")
+    except FileNotFoundError:
+        pytest.skip("no pretrained policy in policies/")
+    report = run_suites(str(path), suites=("track",), quick=True, jobs=1)
+    assert report["metrics"]["track/falls"] == 0
+    assert report["metrics"]["track/err_vx"] < 0.08
+    gates = check_gates(report["metrics"])
+    assert gates and all(g["pass"] for g in gates), [g for g in gates if not g["pass"]]
+    assert "Command tracking" in render_markdown(report)

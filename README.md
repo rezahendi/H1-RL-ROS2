@@ -57,9 +57,12 @@ it walking again.
   produced (down to 1e-5) through stand ↔ walk transitions.
 - **Trains on a laptop.** ~40 M steps ≈ 2 hours on 2 CPU cores. Physics runs multi-threaded in
   MuJoCo, the GPU (if any) only does the network updates.
-- **Tested.** 10 pytest tests, run in CI: controller/env observation equality, sim/training
-  physics equality, exact monotonic `/clock`, policy export round-trip, and a walk test with the
-  shipped policy.
+- **Measured, not claimed.** `h1_rl.eval` runs the published robustness suites (stopping,
+  standing, pushes, randomized episodes) and prints the exact table in this README; CI runs a
+  quick version as a pass/fail gate on every push, alongside 11 pytest tests covering
+  controller/env observation equality, sim/training physics equality and the policy export.
+- **Tune with numbers.** `h1_rl.bench` sweeps environment counts against physics threads on your
+  machine, times a PPO update on your GPU, and estimates the wall-clock of a full run.
 
 ## Quickstart
 
@@ -67,7 +70,7 @@ Requires **ROS 2 Jazzy on Ubuntu 24.04** (WSL2 works). Full install, including W
 venv details: **[docs/SETUP.md](docs/SETUP.md)**.
 
 ```bash
-git clone https://github.com/rezahendi/h1-rl-ros2.git ~/h1_rl_ws && cd ~/h1_rl_ws
+git clone https://github.com/<you>/h1-rl-ros2.git ~/h1_rl_ws && cd ~/h1_rl_ws
 python3 -m venv --system-site-packages ~/h1_venv && source ~/h1_venv/bin/activate
 pip install -r requirements.txt                  # numpy<2, mujoco, pyyaml
 source /opt/ros/jazzy/setup.bash
@@ -121,21 +124,28 @@ upright.
 
 ## Results
 
-Scripted test with the shipped policy (`python -m h1_rl.play --headless`):
+Every number below comes from one command — `python -m h1_rl.eval` on the shipped policy, about
+a minute on two cores. The full report is committed at
+[docs/eval_report.md](docs/eval_report.md), and CI runs `--quick --check` of the same suites on
+every push, so a regression fails the build instead of quietly shipping.
 
-| Command | Achieved | | Robustness test | Result |
+| Command | Achieved | | Robustness suite | Result |
 |---|---|---|---|---|
-| forward 0.5 m/s | 0.47 m/s | | stop from 0.3–1.0 m/s × 12 gait phases (48 runs) | **0 falls** |
-| forward 1.0 m/s | 0.87 m/s | | stand 12 s, 192 robots, sensor noise | **1 fall** |
-| backward 0.5 m/s | 0.39 m/s | | stand 12 s, 192 robots, randomized dynamics | **0 falls** |
-| sideways ±0.4 m/s | ±0.29 m/s | | 0.8 m/s shove while walking (12 runs) | **12 survived** |
-| turn 0.8 rad/s | 0.71 rad/s | | 0.4–0.8 m/s shove while standing | ~1 in 3 survives |
-| zero | motionless, both feet down | | +5 ms actuation delay | no falls |
+| forward 0.5 m/s | 0.47 m/s | | stop from 0.3–1.0 m/s × 12 gait phases | **0 / 48 failures** |
+| forward 1.0 m/s | 0.89 m/s | | stand 12 s, sensor noise | 4 falls / 192 robots |
+| backward 0.5 m/s | 0.40 m/s | | stand 12 s, randomized dynamics | **0 falls / 192** |
+| sideways ±0.4 m/s | ±0.29 m/s | | 0.4 and 0.8 m/s shove while walking | **12/12** and **12/12** |
+| turn 0.8 rad/s | 0.70 rad/s | | 0.4 and 0.8 m/s shove while standing | 7/12 and 3/12 |
+| zero | motionless, both feet down | | 20 s, everything randomized at once | 8 falls / 64 robots |
 
-Mean tracking error over the 11 segments of the script (each averaged after the command ramp):
-**0.041 m/s** (vx), **0.035 m/s** (vy), **0.040 rad/s** (yaw), no falls. The residual gap at the
-edges of the trained range (1.0 m/s forward) is the usual under-tracking of a velocity-tracking
-reward; segments inside the range track within a few cm/s.
+Mean absolute tracking error across the whole script, with 5 ms of actuation delay and no falls:
+**0.038 m/s** (vx), **0.035 m/s** (vy), **0.042 rad/s** (yaw). The under-tracking at 1.0 m/s is the
+usual behaviour of a velocity-tracking reward at the edge of its trained range.
+
+The weak spot is visible in the same table: shoved *while standing*, the robot survives about half
+the 0.4 m/s kicks and a third of the 0.8 m/s ones, because with the gait clock stopped it can only
+answer with ankles and hips — there is no recovery step. Shoved *while walking*, it survived every
+trial.
 
 <p align="center"><img src="docs/training.png" width="860" alt="PPO training curves"></p>
 
@@ -201,6 +211,8 @@ Humanoid-Gym. Randomization: friction 0.4–1.25, pelvis mass −1…+3 kg, CoM 
 | `src/h1_rl/h1_rl/ppo.py`, `train.py` | PPO, asymmetric critic, TensorBoard logging, checkpoints |
 | `src/h1_rl/h1_rl/obs.py` | Observation + gait-clock code shared by training and deployment |
 | `src/h1_rl/h1_rl/controller.py` | The deployed controller (pure NumPy, no ROS, no PyTorch) |
+| `src/h1_rl/h1_rl/eval.py` | Evaluation suites behind the results table, with CI gates |
+| `src/h1_rl/h1_rl/bench.py` | Throughput benchmark: envs × threads, PPO update, run estimate |
 | `src/h1_rl/h1_rl/nodes/` | ROS 2 nodes: `mujoco_sim`, `policy_controller`, `cmd_vel_demo` |
 | `src/h1_rl/models/h1/` | H1 MuJoCo model, URDF for RViz, meshes |
 | `src/h1_rl/policies/h1_walk.npz` | Pretrained policy used by default (weights + training settings) |
@@ -224,8 +236,21 @@ python -m h1_rl.export --checkpoint logs/h1_walk/<run>/model_9800.pt --output po
 python -m h1_rl.play --policy logs/h1_walk/<run>/policy_latest.npz --headless   # tracking report
 ```
 
+Before a long run, see what your machine can actually do:
+
+```bash
+python -m h1_rl.bench                      # sweeps env counts x physics threads, estimates a full run
+python -m h1_rl.bench --json bench.json    # same, saved for comparing machines
+```
+
 Checkpoints are exported automatically every 100 iterations. Standing robustness varies between
-nearby checkpoints, so evaluate a few late ones instead of taking the last.
+nearby checkpoints, so score a few late ones against each other instead of taking the last:
+
+```bash
+python -m h1_rl.eval --policy policies/h1_walk.npz --json shipped.json          # baseline
+python -m h1_rl.eval --policy logs/h1_walk/<run>/policy_latest.npz \
+                     --compare shipped.json                                     # candidate vs baseline
+```
 
 **Tests** (no ROS needed): `pytest` from the repo root, or `cd src/h1_rl && python -m pytest test -q`.
 

@@ -32,6 +32,8 @@ setup(
             "train = h1_rl.train:main",
             "export = h1_rl.export:main",
             "play = h1_rl.play:main",
+            "eval = h1_rl.eval:main",
+            "bench = h1_rl.bench:main",
         ],
     },
 )
