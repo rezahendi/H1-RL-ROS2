@@ -213,3 +213,19 @@ def test_eval_harness_runs_and_gates(cfg):
     gates = check_gates(report["metrics"])
     assert gates and all(g["pass"] for g in gates), [g for g in gates if not g["pass"]]
     assert "Command tracking" in render_markdown(report)
+
+
+def test_thread_choice_is_measured(cfg, tmp_path, monkeypatch):
+    """choose_threads must try several counts, pick the fastest and cache the answer."""
+    monkeypatch.setenv("H1_RL_CACHE", str(tmp_path))
+    import importlib
+
+    from h1_rl import threads as th
+
+    importlib.reload(th)
+    best, rates = th.choose_threads(cfg, num_envs=4, steps=2, verbose=False)
+    assert best in rates and rates[best] == max(rates.values())
+    assert len(rates) >= 2 and all(r > 0 for r in rates.values())
+    assert th.CACHE.exists()
+    cached_best, cached_rates = th.choose_threads(cfg, num_envs=4, steps=2, verbose=False)
+    assert cached_best == best and cached_rates == rates   # second call comes from the cache

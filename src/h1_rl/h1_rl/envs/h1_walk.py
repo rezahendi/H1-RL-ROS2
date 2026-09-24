@@ -28,6 +28,7 @@ from ..obs import (FRAME_DIM, GaitClock, ObsHistory, ObsScales, command_deadband
 from ..robot import (RobotSpec, build_model, foot_geom_ids, joint_qpos_qvel_index,
                      place_on_ground, sensor_slices, set_pd_gains)
 
+DEFAULT_THREADS = 4          # see h1_rl/threads.py
 CONTACT_FORCE_THRESHOLD = 1.0  # [N]
 
 
@@ -126,7 +127,9 @@ class H1WalkEnv:
         self.episode_sums = {k: np.zeros(n) for k in self.reward_scales}
 
         # -------------------------------------------------------------- threads
-        nt = int(num_threads or os.cpu_count() or 1)
+        # NOT os.cpu_count(): throughput peaks at a few threads and then collapses
+        # (GIL around mj_step + main-thread numpy). h1_rl.threads.choose_threads measures it.
+        nt = int(num_threads or min(os.cpu_count() or 1, DEFAULT_THREADS))
         nt = max(1, min(nt, n))
         self.num_threads = nt
         self.chunks = [c for c in np.array_split(np.arange(n), nt) if len(c)]

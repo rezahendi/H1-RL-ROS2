@@ -243,6 +243,19 @@ python -m h1_rl.bench                      # sweeps env counts x physics threads
 python -m h1_rl.bench --json bench.json    # same, saved for comparing machines
 ```
 
+**More physics threads is not better.** MuJoCo's Python binding holds the GIL around every
+`mj_step` and the per-step NumPy work runs on the main thread, so throughput peaks at a handful of
+threads and then collapses. Measured on a 20-thread i9-13900H with 128 robots:
+
+| physics threads | 1 | 2 | 4 | 8 | 20 |
+|---|---|---|---|---|---|
+| `env.step()`, env steps/s | 15,074 | — | **24,449** | — | 6,953 |
+| `mj_step` only, env steps/s | 16,004 | 31,645 | **59,315** | 53,750 | 38,844 |
+
+Because of that, `h1_rl.train` measures a few thread counts once per machine (cached in
+`~/.cache/h1_rl`) and uses the fastest; `--threads N` overrides it. The second row also shows the
+headroom: physics itself scales to ~4x, and what caps the env is its own Python.
+
 Checkpoints are exported automatically every 100 iterations. Standing robustness varies between
 nearby checkpoints, so score a few late ones against each other instead of taking the last:
 

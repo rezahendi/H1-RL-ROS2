@@ -120,7 +120,7 @@ def main() -> None:
     cpu = os.cpu_count() or 1
     env_counts = [int(x) for x in args.envs.split(",")]
     if args.threads == "auto":
-        threads = sorted({1, max(1, cpu // 4), max(1, cpu // 2), cpu})
+        threads = sorted({t for t in (1, 2, 4, 8, max(1, cpu // 2), cpu) if t <= cpu})
     else:
         threads = sorted({int(x) for x in args.threads.split(",")})
 

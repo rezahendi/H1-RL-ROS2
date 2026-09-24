@@ -32,7 +32,8 @@ def parse_args():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None, help="YAML config (default: config/h1_walk.yaml)")
     ap.add_argument("--num-envs", type=int, default=None, help="parallel environments (ppo.num_envs)")
-    ap.add_argument("--threads", type=int, default=None, help="physics threads (default: all CPU cores)")
+    ap.add_argument("--threads", type=int, default=None,
+                    help="physics threads (default: measured once by h1_rl.threads)")
     ap.add_argument("--iterations", type=int, default=None, help="PPO iterations (ppo.max_iterations)")
     ap.add_argument("--device", default="auto", help="auto | cpu | cuda")
     ap.add_argument("--seed", type=int, default=1)
@@ -69,7 +70,12 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     num_envs = int(pcfg["num_envs"])
-    env = H1WalkEnv(cfg, num_envs=num_envs, num_threads=args.threads, seed=args.seed)
+    threads = args.threads
+    if threads is None:
+        from .threads import choose_threads
+
+        threads, _ = choose_threads(cfg, num_envs)
+    env = H1WalkEnv(cfg, num_envs=num_envs, num_threads=threads, seed=args.seed)
     policy = ActorCritic(env.num_obs, env.num_critic_obs, env.num_actions,
                          pcfg["actor_hidden_dims"], pcfg["critic_hidden_dims"],
                          pcfg.get("activation", "elu"), float(pcfg["init_noise_std"])).to(device)
