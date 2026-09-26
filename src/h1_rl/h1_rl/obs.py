@@ -19,7 +19,12 @@ from __future__ import annotations
 import numpy as np
 
 GRAVITY = np.array([0.0, 0.0, -1.0])
-FRAME_DIM = 41
+FRAME_DIM = 41          # the 10-joint leg policy; use frame_dim(n) for anything else
+
+
+def frame_dim(num_actions: int) -> int:
+    """gyro 3 + gravity 3 + command 3 + joint angles, velocities and last action + clock 2."""
+    return 11 + 3 * int(num_actions)
 
 
 def quat_rotate_inverse(q_wxyz: np.ndarray, v: np.ndarray) -> np.ndarray:
@@ -53,30 +58,46 @@ class GaitClock:
     Requires a right-leg offset of 0.5 and a stance ratio above 0.5.
     """
 
-    def __init__(self, period: float, dt: float, num: int = 1, stand_when_idle: bool = True):
+    def __init__(self, period: float, dt: float, num: int = 1, stand_when_idle: bool = True,
+                 recovery_ticks: int = 0):
         self.ticks_per_cycle = int(round(period / dt))
         if self.ticks_per_cycle % 2:
             raise ValueError("gait period / control dt must be an even number of ticks")
         self.half = self.ticks_per_cycle // 2
         self.stand_when_idle = stand_when_idle
+        self.recovery_ticks = int(recovery_ticks)
         self.ticks = np.zeros(num, dtype=np.int64)
+        self.recovery = np.zeros(num, dtype=np.int64)   # >0: stepping to catch a disturbance
 
     @property
     def phase(self) -> np.ndarray:
         return self.ticks / self.ticks_per_cycle
 
     def standing(self, walking) -> np.ndarray:
-        """True where the clock is stopped (idle command and both feet in stance)."""
+        """True where the clock is stopped (idle command, both feet in stance, not recovering)."""
         if not self.stand_when_idle:
             return np.zeros(self.ticks.shape, dtype=bool)
-        return ~np.asarray(walking, dtype=bool) & (self.ticks % self.half == 0)
+        return ~np.asarray(walking, dtype=bool) & (self.ticks % self.half == 0) & (self.recovery <= 0)
+
+    def trigger_recovery(self, disturbed) -> None:
+        """A shove while standing restarts the clock, so the robot can step to catch itself.
+
+        The latch runs for `recovery_ticks`; the clock then stops at the next double-support
+        instant, which is how the robot settles back into standing on its own.
+        """
+        if self.recovery_ticks:
+            self.recovery = np.where(np.asarray(disturbed, dtype=bool),
+                                     self.recovery_ticks, self.recovery)
 
     def reset(self, ids=slice(None)) -> None:
         self.ticks[ids] = 0
+        self.recovery[ids] = 0
 
     def advance(self, walking) -> None:
         moving = ~self.standing(walking)
         self.ticks = np.where(moving, (self.ticks + 1) % self.ticks_per_cycle, self.ticks)
+        if self.recovery_ticks:
+            self.recovery = np.maximum(self.recovery - 1, 0)
 
 
 def ramp_command(current: np.ndarray, target: np.ndarray, max_delta: np.ndarray) -> np.ndarray:
@@ -102,13 +123,61 @@ def is_walking(cmd: np.ndarray) -> np.ndarray:
     return np.any(np.asarray(cmd) != 0.0, axis=-1)
 
 
-def reference_pattern(policy_joints: list[str]) -> np.ndarray:
-    """(2, n_actions) joint pattern of the stepping reference for the (left, right) swing leg:
-    hip pitch -1, knee +2, ankle -1 (bends the leg and keeps the foot level)."""
+class DisturbanceDetector:
+    """Flags a shove from IMU signals alone, identically in training and on the robot.
+
+    A standing H1 holds a small, slowly drifting tilt of its own (~0.065 of gravity in the xy
+    plane), so an absolute tilt threshold either fires constantly or misses real pushes. This
+    compares the tilt against a slow moving average instead, which measured cleanly: quiet
+    standing stays below 0.075 while a 0.4 m/s shove reaches 0.28.
+    """
+
+    def __init__(self, num: int = 1, tilt_change: float = 0.0, ang_vel: float = 0.0,
+                 filter_rate: float = 0.02):
+        self.tilt_change = float(tilt_change)
+        self.ang_vel = float(ang_vel)
+        self.alpha = float(filter_rate)
+        self.enabled = self.tilt_change > 0.0 or self.ang_vel > 0.0
+        self.ema = np.zeros((num, 2))
+        self.ready = np.zeros(num, dtype=bool)
+
+    def reset(self, ids=slice(None)) -> None:
+        self.ema[ids] = 0.0
+        self.ready[ids] = False
+
+    def __call__(self, gravity: np.ndarray, gyro: np.ndarray) -> np.ndarray:
+        gxy = np.asarray(gravity, dtype=np.float64)[..., :2]
+        fresh = ~self.ready
+        if np.any(fresh):
+            self.ema[fresh] = gxy[fresh]
+            self.ready[fresh] = True
+        deviation = np.linalg.norm(gxy - self.ema, axis=-1)
+        spin = np.linalg.norm(np.asarray(gyro, dtype=np.float64)[..., :2], axis=-1)
+        self.ema += self.alpha * (gxy - self.ema)
+        if not self.enabled:
+            return np.zeros(deviation.shape, dtype=bool)
+        return ((deviation > self.tilt_change) if self.tilt_change > 0 else False) | \
+               ((spin > self.ang_vel) if self.ang_vel > 0 else False)
+
+
+def reference_pattern(policy_joints: list[str], arm_swing: float = 0.0) -> np.ndarray:
+    """(2, n_actions) joint offsets of the stepping reference for the (left, right) swing leg.
+
+    Legs: hip pitch -1, knee +2, ankle -1 — bends the leg and keeps the foot level (negative
+    hip pitch swings the leg forward). With `arm_swing` and the arms in the action space, the
+    opposite arm swings forward with the leg, the same-side arm back, as people walk.
+    """
     pattern = np.zeros((2, len(policy_joints)))
+    index = {name: i for i, name in enumerate(policy_joints)}
     for side, prefix in enumerate(("left", "right")):
         for joint, gain in (("hip_pitch", -1.0), ("knee", 2.0), ("ankle", -1.0)):
-            pattern[side, policy_joints.index(f"{prefix}_{joint}_joint")] = gain
+            pattern[side, index[f"{prefix}_{joint}_joint"]] = gain
+        if arm_swing:
+            other = "right" if prefix == "left" else "left"
+            for arm, gain in ((other, -arm_swing), (prefix, arm_swing)):
+                j = index.get(f"{arm}_shoulder_pitch_joint")
+                if j is not None:
+                    pattern[side, j] = gain
     return pattern
 
 

@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .obs import (FRAME_DIM, GaitClock, ObsHistory, ObsScales, command_deadband, gait_reference,
-                  is_walking, obs_frame, projected_gravity, ramp_command, reference_pattern)
+from .obs import (DisturbanceDetector, GaitClock, ObsHistory, ObsScales, command_deadband,
+                  frame_dim, gait_reference, is_walking, obs_frame, projected_gravity,
+                  ramp_command, reference_pattern)
 from .policy import Policy
 
 RUNNING, FALLEN = "running", "fallen"
@@ -48,10 +49,15 @@ class PolicyController:
         self.stance_ratio = float(meta["gait"]["stance_ratio"])
         self.residual_reference = bool(meta.get("residual_reference", False))
         self.ref_amplitude = float(meta.get("ref_amplitude", 0.0))
-        self.ref_pattern = reference_pattern(self.policy_joints)
-        # older policy files: clock never stops, no command deadband
+        self.ref_pattern = reference_pattern(self.policy_joints,
+                                             float(meta.get("arm_swing", 0.0)))
+        # older policy files: clock never stops, no command deadband, no recovery step
+        rec = dict(meta.get("recovery") or {})
+        self.disturbance = DisturbanceDetector(1, rec.get("tilt_change", 0.0),
+                                               rec.get("ang_vel", 0.0), rec.get("filter", 0.02))
         self.clock = GaitClock(self.gait_period, float(meta["control_dt"]), 1,
-                               bool(meta.get("stand_when_idle", False)))
+                               bool(meta.get("stand_when_idle", False)),
+                               int(round(float(rec.get("time", 0.0)) / float(meta["control_dt"]))))
         cmds = meta["commands"]
         self.xy_deadband = float(cmds.get("small_cmd_threshold", 0.0))
         self.yaw_deadband = float(cmds.get("small_yaw_threshold", 0.0))
@@ -63,8 +69,9 @@ class PolicyController:
         self.recover_tilt = recover_tilt
         self.recover_steps = int(round(recover_time / self.dt))
         self.damping_kd = damping_kd
-        self.history = ObsHistory(1, FRAME_DIM, int(meta["history_length"]))
-        if self.history.length * FRAME_DIM != self.policy.obs_dim:
+        fd = int(meta.get("frame_dim") or frame_dim(len(self.policy_joints)))
+        self.history = ObsHistory(1, fd, int(meta["history_length"]))
+        if self.history.length * fd != self.policy.obs_dim:
             raise ValueError("policy input size does not match its metadata")
         self.state = RUNNING
         self.reset()
@@ -82,6 +89,7 @@ class PolicyController:
     def reset(self) -> None:
         self.last_action = np.zeros(len(self.leg))
         self.clock.reset()
+        self.disturbance.reset()
         self._last_cmd = np.zeros(3)
         self.command = np.zeros(3)       # effective command (acceleration limited)
         self._history_ready = False
@@ -141,5 +149,8 @@ class PolicyController:
             target[self.leg] += gait_reference(self.clock.phase, self.gait_offset, self.stance_ratio,
                                                self.ref_amplitude, self.ref_pattern)[0]
         self._last_cmd = cmd
+        # a shove restarts the clock so the robot can step to catch itself
+        self.clock.trigger_recovery(self.disturbance(gravity[None],
+                                                     np.asarray(gyro, dtype=np.float64)[None]))
         self.clock.advance([is_walking(cmd)])  # stops at double support when the command is zero
         return self.hold_command(target)

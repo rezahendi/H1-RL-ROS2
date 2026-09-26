@@ -229,3 +229,111 @@ def test_thread_choice_is_measured(cfg, tmp_path, monkeypatch):
     assert th.CACHE.exists()
     cached_best, cached_rates = th.choose_threads(cfg, num_envs=4, steps=2, verbose=False)
     assert cached_best == best and cached_rates == rates   # second call comes from the cache
+
+
+def test_recovery_step_after_a_shove():
+    """A shove restarts the gait clock; quiet standing leaves it stopped."""
+    from h1_rl.obs import DisturbanceDetector, GaitClock
+
+    clock = GaitClock(period=0.8, dt=0.02, num=1, stand_when_idle=True, recovery_ticks=20)
+    detect = DisturbanceDetector(1, tilt_change=0.09, ang_vel=1.5, filter_rate=0.02)
+    quiet, still = np.array([[0.06, 0.0, -1.0]]), np.zeros((1, 3))
+    for _ in range(50):  # standing: the clock must stay stopped
+        clock.trigger_recovery(detect(quiet, still))
+        clock.advance([False])
+    assert clock.ticks[0] == 0 and clock.standing([False])[0]
+
+    clock.trigger_recovery(detect(np.array([[0.30, 0.0, -0.95]]), still))  # shoved
+    assert clock.recovery[0] == 20
+    for _ in range(19):
+        clock.advance([False])
+        assert not clock.standing([False])[0]          # stepping to catch itself
+    clock.advance([False])
+    assert clock.ticks[0] == 20 and clock.standing([False])[0]   # stopped in double support
+
+
+def test_whole_body_policy_matches_between_env_and_controller(tmp_path):
+    """The 19-joint (arms + torso) variant must stay consistent end to end, like the leg policy."""
+    from h1_rl.obs import frame_dim
+
+    cfg = load_config("config/h1_walk_arms.yaml")
+    env = H1WalkEnv(cfg, num_envs=1, num_threads=1, seed=5, randomize=False, obs_noise=False,
+                    pushes=False)
+    assert env.num_actions == 19 and env.num_obs == frame_dim(19) * cfg["observations"]["history_length"]
+    ctrl = PolicyController(str(random_policy_file(tmp_path, cfg, env.num_obs, env.num_actions)))
+    assert len(ctrl.policy_joints) == 19
+    obs, _ = env.reset_all()
+    env.cmd_target[0] = env.commands[0] = [0.4, 0.0, 0.0]
+    obs = env._compute_obs(np.array([0]))[0]
+    ctrl.command = env.commands[0].copy()
+    for k in range(40):
+        target = env.cmd_target[0].copy()
+        assert ctrl.phase == pytest.approx(float(env.phase[0]))
+        out = ctrl.step(env.q[0], env.dq[0], env.base_quat[0], env.gyro[0], target)
+        np.testing.assert_allclose(ctrl.history.flat()[0], obs[0], atol=1e-5,
+                                   err_msg=f"observation mismatch at step {k}")
+        obs, _, _, done, _ = env.step(ctrl.last_action[None])
+        if done[0]:
+            break
+        np.testing.assert_allclose(out.position, env.targets[0], atol=1e-9)
+    env.close()
+
+
+def test_terrain_patches_are_seamless_and_curriculum_moves():
+    """Rough-terrain env: heights are terrain relative, patches wrap, the critic sees a scan."""
+    from h1_rl.obs import frame_dim
+    from h1_rl.terrain import generate, sample
+
+    rng = np.random.default_rng(0)
+    for kind in ("rough", "waves", "steps"):
+        h = generate(rng, 64, 1.0, kind)
+        assert h.min() == pytest.approx(0.0) and h.max() > 0.02
+        # one period apart is the same ground: that is what makes wrapping invisible
+        assert sample(h, 12.0, -5.9, 1.3) == pytest.approx(sample(h, 12.0, 6.1, 1.3), abs=1e-9)
+
+    cfg = load_config("config/h1_walk_terrain.yaml")
+    cfg["terrain"]["start_level"] = 8
+    env = H1WalkEnv(cfg, num_envs=4, num_threads=1, seed=1)
+    assert env.terrain_on
+    assert env.num_critic_obs == frame_dim(env.num_actions) + 10 + len(env.scan_xy)
+    obs, critic = env.reset_all()
+    assert critic.shape[1] == env.num_critic_obs
+    assert np.any([t.max() > 0.02 for t in env.terrain])          # terrain was generated
+    assert np.all(env.base_height > 0.9) and np.all(env.base_height < 1.2)   # relative to ground
+    before = env._ground_at(env.qpos[:, 0], env.qpos[:, 1])[0]
+    env.datas[0].qpos[0] += env.terrain_patch                      # walk one period away
+    env.qpos[0, 0] += env.terrain_patch
+    env._wrap_on_terrain()
+    assert abs(env._ground_at(env.qpos[:, 0], env.qpos[:, 1])[0] - before) < 1e-9
+    assert abs(env.qpos[0, 0]) < env.terrain_wrap
+    env.close()
+
+
+def test_distillation_produces_a_deployable_student(cfg, tmp_path):
+    """A privileged teacher distils into a student the ROS controller can run."""
+    torch = pytest.importorskip("torch")
+    from h1_rl import distill
+    from h1_rl.ppo import ActorCritic
+
+    env = H1WalkEnv(cfg, num_envs=2, num_threads=1, seed=0)
+    num_obs, num_critic, num_act = env.num_obs, env.num_critic_obs, env.num_actions
+    env.close()
+    pcfg = cfg["ppo"]
+    teacher = ActorCritic(num_critic, num_critic, num_act, pcfg["actor_hidden_dims"],
+                          pcfg["critic_hidden_dims"], "elu", 0.8)          # privileged actor
+    teacher_path = tmp_path / "teacher.pt"
+    torch.save({"iteration": 1, "teacher": True, "policy": teacher.state_dict(),
+                "obs_norm": None, "critic_norm": None, "cfg": cfg, "norm_eps": 1e-2}, teacher_path)
+
+    out = tmp_path / "student"
+    distill.main(["--teacher", str(teacher_path), "--num-envs", "4", "--threads", "1",
+                  "--iterations", "2", "--steps-per-env", "4", "--epochs", "1",
+                  "--mini-batches", "1", "--save-interval", "1", "--log-dir", str(out),
+                  "--run-name", "run"])
+    policy_file = out / "run" / "policy_latest.npz"
+    assert policy_file.exists()
+    ctrl = PolicyController(str(policy_file))          # loads => deployable
+    assert ctrl.policy.obs_dim == num_obs
+    q = np.zeros(len(ctrl.joint_names))
+    out_cmd = ctrl.step(q, q, np.array([1.0, 0, 0, 0]), np.zeros(3), [0.3, 0.0, 0.0])
+    assert out_cmd.position.shape == (len(ctrl.joint_names),)

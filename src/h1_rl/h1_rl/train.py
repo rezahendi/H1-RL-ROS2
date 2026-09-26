@@ -76,22 +76,27 @@ def main() -> None:
 
         threads, _ = choose_threads(cfg, num_envs)
     env = H1WalkEnv(cfg, num_envs=num_envs, num_threads=threads, seed=args.seed)
-    policy = ActorCritic(env.num_obs, env.num_critic_obs, env.num_actions,
+    # A teacher policy reads the privileged state directly; h1_rl.distill turns one into a
+    # deployable student that only sees what the robot can measure.
+    teacher = bool(pcfg.get("privileged_actor", False))
+    actor_obs = env.num_critic_obs if teacher else env.num_obs
+    policy = ActorCritic(actor_obs, env.num_critic_obs, env.num_actions,
                          pcfg["actor_hidden_dims"], pcfg["critic_hidden_dims"],
                          pcfg.get("activation", "elu"), float(pcfg["init_noise_std"])).to(device)
     use_norm = bool(pcfg.get("empirical_normalization", True))
-    obs_norm = EmpiricalNormalization(env.num_obs).to(device)
+    obs_norm = EmpiricalNormalization(actor_obs).to(device)
     critic_norm = EmpiricalNormalization(env.num_critic_obs).to(device)
     ppo = PPO(policy, pcfg, device)
     steps = int(pcfg["num_steps_per_env"])
-    storage = RolloutStorage(steps, num_envs, env.num_obs, env.num_critic_obs, env.num_actions, device)
+    storage = RolloutStorage(steps, num_envs, actor_obs, env.num_critic_obs, env.num_actions, device)
 
     start_it = 0
     if resume is not None:
         policy.load_state_dict(resume["policy"])
         obs_norm.load_state_dict(resume["obs_norm"])
         critic_norm.load_state_dict(resume["critic_norm"])
-        ppo.optimizer.load_state_dict(resume["optimizer"])
+        if resume.get("optimizer"):
+            ppo.optimizer.load_state_dict(resume["optimizer"])
         ppo.lr = float(resume.get("lr", ppo.lr))
         start_it = int(resume["iteration"])
     if args.reset_std is not None:
@@ -112,14 +117,16 @@ def main() -> None:
 
     print(f"[train] run dir: {run_dir}")
     print(f"[train] device: {device} | envs: {num_envs} | physics threads: {env.num_threads} | "
-          f"obs: {env.num_obs} | critic obs: {env.num_critic_obs} | actions: {env.num_actions}")
+          f"obs: {env.num_obs} | critic obs: {env.num_critic_obs} | actions: {env.num_actions}"
+          + (" | PRIVILEGED TEACHER (not deployable: distill it)" if teacher else ""))
 
     def save(it: int) -> Path:
         path = run_dir / f"model_{it}.pt"
-        torch.save({"iteration": it, "policy": policy.state_dict(), "obs_norm": obs_norm.state_dict(),
+        torch.save({"iteration": it, "teacher": teacher, "policy": policy.state_dict(), "obs_norm": obs_norm.state_dict(),
                     "critic_norm": critic_norm.state_dict(), "optimizer": ppo.optimizer.state_dict(),
                     "lr": ppo.lr, "cfg": cfg, "norm_eps": obs_norm.eps}, path)
-        export_checkpoint(path, run_dir / "policy_latest.npz")
+        if not teacher:          # a privileged actor is not deployable: distill it first
+            export_checkpoint(path, run_dir / "policy_latest.npz")
         return path
 
     ret_buf = collections.deque(maxlen=200)
@@ -143,8 +150,8 @@ def main() -> None:
         critic_norm.train(use_norm)
         with torch.no_grad():
             for _ in range(steps):
-                o = obs_norm(obs) if use_norm else obs
                 c = critic_norm(cobs) if use_norm else cobs
+                o = c if teacher else (obs_norm(obs) if use_norm else obs)
                 dist = policy.distribution(o)
                 actions = dist.sample()
                 values = policy.value(c)

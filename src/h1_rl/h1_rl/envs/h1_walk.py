@@ -22,9 +22,11 @@ from concurrent.futures import ThreadPoolExecutor
 import mujoco
 import numpy as np
 
-from ..obs import (FRAME_DIM, GaitClock, ObsHistory, ObsScales, command_deadband, gait_reference,
+from ..obs import (DisturbanceDetector, GaitClock, ObsHistory, ObsScales,
+                   command_deadband, frame_dim, gait_reference,
                    is_walking, leg_phases, obs_frame, projected_gravity, ramp_command, reference_pattern,
                    swing_shape)
+from .. import terrain
 from ..robot import (RobotSpec, build_model, foot_geom_ids, joint_qpos_qvel_index,
                      place_on_ground, sensor_slices, set_pd_gains)
 
@@ -60,8 +62,33 @@ class H1WalkEnv:
         jids = [mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, j) for j in self.robot.joint_names]
         self.joint_range = m.jnt_range[jids].copy()
 
+        # ------------------------------------------------------------ terrain
+        tcfg = dict(cfg.get("terrain") or {})
+        self.terrain_on = bool(tcfg.get("enable", False)) and m.nhfield > 0
+        if self.terrain_on:
+            self.terrain_kinds = list(tcfg.get("kinds", ["rough"]))
+            self.terrain_patch = float(tcfg.get("patch", 12.0))
+            self.terrain_amplitude = float(tcfg.get("amplitude", 0.12))
+            self.terrain_levels = int(tcfg.get("levels", 10))
+            self.terrain_wrap = float(tcfg.get("wrap_radius", 4.0))
+            self.terrain_promote = float(tcfg.get("promote_distance", 0.7))
+            self.elevation = float(m.hfield_size[0][2])
+            self.terrain_n = int(m.hfield_nrow[0])
+            self.terrain = np.zeros((n, self.terrain_n, self.terrain_n))
+            off = np.array([-0.4, 0.0, 0.4])
+            self.scan_xy = np.stack(np.meshgrid(off, off, indexing="ij"), axis=-1).reshape(-1, 2)
+            self.level = np.full(n, float(tcfg.get("start_level", 1)))
+            self.spawn_xy = np.zeros((n, 2))
+            self.ground = np.zeros(n)
+            self.foot_ground = np.zeros((n, 2))
+
         # --------------------------------------------------------------- tables
         self.leg = self.robot.policy_idx
+        # torso and arms, when they are part of the action space (empty for the leg-only policy)
+        upper = [j for j in self.robot.policy_joints
+                 if not any(k in j for k in ("hip", "knee", "ankle"))]
+        self.upper = np.array([self.robot.joint_names.index(j) for j in upper], dtype=int)
+        self.upper_in_action = np.array([self.robot.policy_joints.index(j) for j in upper], dtype=int)
         self.num_actions = len(self.leg)
         self.default_q = self.robot.default_q.copy()
         ctrl = cfg["control"]
@@ -78,11 +105,17 @@ class H1WalkEnv:
         self.stance_ratio, self.swing_height = float(g["stance_ratio"]), float(g["swing_height"])
         self.ref_amplitude = float(g.get("ref_amplitude", 0.3))
         # stepping reference: bend hip/knee/ankle of the swing leg (foot stays level)
-        self.ref_pattern = reference_pattern(self.robot.policy_joints)
+        self.ref_pattern = reference_pattern(self.robot.policy_joints,
+                                             float(g.get("arm_swing", 0.0)))
         # the policy outputs residuals on top of the reference (feedforward gait + learned feedback)
         self.residual_reference = bool(ctrl.get("residual_reference", False))
         self.cmd_cfg = cfg["commands"]
-        self.clock = GaitClock(self.gait_period, self.dt, n, bool(g.get("stand_when_idle", False)))
+        rec = dict(g.get("recovery") or {})
+        self.disturbance = DisturbanceDetector(n, rec.get("tilt_change", 0.0),
+                                               rec.get("ang_vel", 0.0), rec.get("filter", 0.02))
+        recovery_ticks = int(round(float(rec.get("time", 0.0)) / self.dt))
+        self.clock = GaitClock(self.gait_period, self.dt, n, bool(g.get("stand_when_idle", False)),
+                               recovery_ticks)
         self.dr = cfg["domain_rand"]
         term = cfg["env"]["termination"]
         self.min_base_height = float(term["min_base_height"])
@@ -114,9 +147,10 @@ class H1WalkEnv:
         # --------------------------------------------------------- observations
         self.scales = ObsScales(cfg)
         self.noise = cfg["observations"]["noise"]
-        self.history = ObsHistory(n, FRAME_DIM, int(cfg["observations"]["history_length"]))
-        self.num_obs = FRAME_DIM * self.history.length
-        self.num_critic_obs = FRAME_DIM + 3 + 1 + 2 + 2 + 2
+        fd = frame_dim(self.num_actions)
+        self.history = ObsHistory(n, fd, int(cfg["observations"]["history_length"]))
+        self.num_obs = fd * self.history.length
+        self.num_critic_obs = fd + 3 + 1 + 2 + 2 + 2 + (len(self.scan_xy) if self.terrain_on else 0)
 
         # -------------------------------------------------------------- rewards
         self.tracking_sigma = float(rew["tracking_sigma"])
@@ -155,6 +189,11 @@ class H1WalkEnv:
             self._apply_pushes()
         self._simulate()
         self.episode_step += 1
+        # a shove while standing restarts the gait clock, so the robot may step to catch itself.
+        # Decided on the freshly simulated IMU signals, before the clock advances - exactly what
+        # the deployed controller does with its own measurements.
+        self.clock.trigger_recovery(self.disturbance(projected_gravity(self.qpos[:, 3:7]),
+                                                     self.sensordata[:, self.sens["imu_gyro"]]))
         self.clock.advance(is_walking(self.commands))
         self._update_state()
 
@@ -201,6 +240,8 @@ class H1WalkEnv:
             self.qvel[i] = d.qvel
             self.sensordata[i] = d.sensordata
             self.tau[i] = d.actuator_force
+            if self.terrain_on:
+                self.spawn_xy[i] = d.qpos[0:2]
 
     def _simulate(self):
         if self.pool is not None:
@@ -222,7 +263,10 @@ class H1WalkEnv:
     def _update_state(self):
         s = self.sensordata
         sens = self.sens
-        self.base_height = self.qpos[:, 2]
+        if self.terrain_on:
+            self._wrap_on_terrain()
+            self.ground = self._ground_at(self.qpos[:, 0], self.qpos[:, 1])
+        self.base_height = self.qpos[:, 2] - self.ground if self.terrain_on else self.qpos[:, 2]
         self.base_quat = self.qpos[:, 3:7]
         self.q = self.qpos[:, self.qadr]
         self.dq = self.qvel[:, self.vadr]
@@ -232,6 +276,9 @@ class H1WalkEnv:
         self.foot_force = np.stack([s[:, sens["left_foot_touch"]][:, 0], s[:, sens["right_foot_touch"]][:, 0]], axis=1)
         self.contact = self.foot_force > CONTACT_FORCE_THRESHOLD
         self.foot_pos = np.stack([s[:, sens["left_foot_pos"]], s[:, sens["right_foot_pos"]]], axis=1)
+        if self.terrain_on:   # foot clearance is measured from the ground under each foot
+            self.foot_ground = self._ground_at(self.foot_pos[:, :, 0], self.foot_pos[:, :, 1])
+            self.foot_pos[:, :, 2] -= self.foot_ground
         self.foot_vel = np.stack([s[:, sens["left_foot_vel"]], s[:, sens["right_foot_vel"]]], axis=1)
         self.phase = self.clock.phase
         self.leg_phase = leg_phases(self.phase, self.gait_offset)
@@ -240,6 +287,52 @@ class H1WalkEnv:
 
     def _reference(self, phase: np.ndarray) -> np.ndarray:
         return gait_reference(phase, self.gait_offset, self.stance_ratio, self.ref_amplitude, self.ref_pattern)
+
+    # =============================================================== terrain
+    def _new_terrain(self, i: int) -> None:
+        """Fresh patch for one robot at its current curriculum level."""
+        kind = self.terrain_kinds[self.rng.integers(len(self.terrain_kinds))]
+        level = self.level[i] / max(self.terrain_levels, 1)
+        self.terrain[i] = terrain.generate(self.rng, self.terrain_n, level, kind,
+                                           self.terrain_amplitude)
+        terrain.write_to_model(self.models[i], self.terrain[i], self.elevation)
+
+    def _ground_at(self, x, y) -> np.ndarray:
+        """Vectorised bilinear height lookup, one patch per robot, wrapping at the edges."""
+        n, patch = self.terrain_n, self.terrain_patch
+        fx = (np.asarray(x) / patch + 0.5) * n
+        fy = (np.asarray(y) / patch + 0.5) * n
+        i0, j0 = np.floor(fx).astype(int), np.floor(fy).astype(int)
+        tx, ty = fx - i0, fy - j0
+        i0, j0 = i0 % n, j0 % n
+        i1, j1 = (i0 + 1) % n, (j0 + 1) % n
+        e = np.arange(self.num_envs)
+        if np.ndim(x) > 1:                       # (N, k) points, e.g. both feet
+            e = e[:, None]
+        t = self.terrain
+        return (t[e, i0, j0] * (1 - tx) * (1 - ty) + t[e, i1, j0] * tx * (1 - ty)
+                + t[e, i0, j1] * (1 - tx) * ty + t[e, i1, j1] * tx * ty)
+
+    def _wrap_on_terrain(self) -> None:
+        """Move a robot that walked off its patch back by exactly one period (seamless)."""
+        xy = self.qpos[:, 0:2]
+        shift = np.where(np.abs(xy) > self.terrain_wrap,
+                         np.round(xy / self.terrain_patch) * self.terrain_patch, 0.0)
+        for i in np.nonzero(np.any(shift != 0.0, axis=1))[0]:
+            self.datas[i].qpos[0:2] -= shift[i]
+            self.qpos[i, 0:2] -= shift[i]
+            self.spawn_xy[i] -= shift[i]
+
+    def _update_curriculum(self, ids: np.ndarray) -> None:
+        """Walk far enough and the terrain gets rougher; fall early and it gets easier."""
+        ran = self.episode_step[ids] > 0.25 * self.max_episode_steps   # not the first reset
+        travelled = np.linalg.norm(self.qpos[ids, 0:2] - self.spawn_xy[ids], axis=1)
+        asked = np.maximum(np.linalg.norm(self.commands[ids, :2], axis=1)
+                           * self.episode_step[ids] * self.dt, 0.5)
+        finished = self.episode_step[ids] >= self.max_episode_steps
+        up = finished & (travelled > self.terrain_promote * asked)
+        down = ran & ~finished & (travelled < 0.3 * asked)
+        self.level[ids] = np.clip(self.level[ids] + up * 1.0 - down * 1.0, 0, self.terrain_levels)
 
     # ================================================================ resets
     def _randomize_model(self, i: int):
@@ -261,18 +354,26 @@ class H1WalkEnv:
         rng, dr = self.rng, self.dr
         noise = float(dr["init_joint_noise"]) if self.randomize else 0.0
         vel = float(dr["init_base_vel"]) if self.randomize else 0.0
+        if self.terrain_on:
+            self._update_curriculum(ids)
         for i in ids:
             m, d = self.models[i], self.datas[i]
             if self.randomize:
                 self._randomize_model(i)
+            if self.terrain_on:
+                self._new_terrain(i)
             mujoco.mj_resetData(m, d)
             yaw = rng.uniform(-np.pi, np.pi)
             q = self.default_q + rng.uniform(-noise, noise, size=self.robot.num_joints)
             q = np.clip(q, self.joint_range[:, 0], self.joint_range[:, 1])
-            d.qpos[0:3] = [0.0, 0.0, 1.0]
+            xy = rng.uniform(-1.0, 1.0, size=2) if self.terrain_on else np.zeros(2)
+            d.qpos[0:3] = [xy[0], xy[1], 1.0]
             d.qpos[3:7] = [np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2)]
             d.qpos[self.qadr] = q
-            place_on_ground(m, d, self.feet)
+            place_on_ground(m, d, self.feet)      # lowest foot just above z = 0 ...
+            if self.terrain_on:                   # ... then lift onto the local ground
+                d.qpos[2] += terrain.sample(self.terrain[i], self.terrain_patch,
+                                            d.qpos[0], d.qpos[1]) + 0.01
             d.qvel[0:6] = rng.uniform(-vel, vel, size=6)
             d.ctrl[:] = q
             mujoco.mj_forward(m, d)
@@ -286,6 +387,7 @@ class H1WalkEnv:
         self.last_actions[ids] = 0.0
         self.last_dq_leg[ids] = self.qvel[np.ix_(ids, self.vadr[self.leg])]
         self.episode_step[ids] = 0
+        self.disturbance.reset(ids)
         self.clock.reset(ids)
         lo, hi = dr["action_delay_steps"] if self.randomize else (0, 0)
         self.delay[ids] = rng.integers(int(lo), int(hi) + 1, size=len(ids))
@@ -331,6 +433,15 @@ class H1WalkEnv:
         if len(reset_ids):
             self.history.reset(reset_ids, noisy[reset_ids])
         obs = self.history.flat()
+        extra = []
+        if self.terrain_on:   # privileged: a small height scan around the base, body aligned
+            yaw = np.arctan2(2.0 * (self.base_quat[:, 0] * self.base_quat[:, 3]),
+                             1.0 - 2.0 * self.base_quat[:, 3] ** 2)
+            c, sn = np.cos(yaw)[:, None], np.sin(yaw)[:, None]
+            dx = self.scan_xy[:, 0][None, :] * c - self.scan_xy[:, 1][None, :] * sn
+            dy = self.scan_xy[:, 0][None, :] * sn + self.scan_xy[:, 1][None, :] * c
+            scan = self._ground_at(self.qpos[:, 0:1] + dx, self.qpos[:, 1:2] + dy)
+            extra = [scan - self.ground[:, None]]
         critic = np.concatenate(
             [clean,
              self.base_lin_vel * self.scales.lin_vel,
@@ -338,7 +449,7 @@ class H1WalkEnv:
              self.contact.astype(np.float64),
              self.foot_pos[:, :, 2],
              (self.friction - 0.8)[:, None],
-             (self.added_mass * 0.1)[:, None]],
+             (self.added_mass * 0.1)[:, None]] + extra,
             axis=1)
         return obs.astype(np.float32), critic.astype(np.float32)
 
@@ -419,6 +530,13 @@ class H1WalkEnv:
         still = np.sum(self.dq[:, self.leg] ** 2, axis=1)
         pose = np.sum(np.abs(self.q[:, self.leg] - self.default_q[self.leg]), axis=1)
         return (still + 0.2 * pose) * standing
+
+    def _reward_upper_pos(self):
+        """Keep torso and arms near their default pose (they may still swing with the gait)."""
+        if not len(self.upper):
+            return np.zeros(self.num_envs)
+        ref = self.default_q[self.upper] + self._reference(self.phase)[:, self.upper_in_action]
+        return np.sum((self.q[:, self.upper] - ref) ** 2, axis=1)
 
     def _reward_contact(self):
         # +1 per foot whose contact matches the gait clock, -0.3 per mismatch

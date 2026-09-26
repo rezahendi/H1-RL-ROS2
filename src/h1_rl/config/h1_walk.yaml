@@ -108,6 +108,11 @@ gait:
   swing_height: 0.07        # [m] sole clearance at mid swing
   ref_amplitude: 0.3        # [rad] hip/ankle bend of the stepping reference (knee: 2x)
   stand_when_idle: true     # zero command: finish the step, then stand still (clock stops)
+  recovery:                 # a shove while standing restarts the clock so the robot can step
+    tilt_change: 0.09       # |gravity xy - its slow average| that counts as a shove
+    ang_vel: 1.5            # [rad/s] |gyro xy| that counts as being knocked
+    filter: 0.02            # rate of the slow average (quiet standing sits below 0.075)
+    time: 0.4               # [s] minimum stepping time before it may stand still again
 
 commands:
   lin_vel_x: [-0.6, 1.0]    # [m/s]

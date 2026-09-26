@@ -1,0 +1,11 @@
+# =============================================================================
+#  Privileged teacher: the actor sees the simulator state the critic sees.
+#  Not deployable - distil it into a proprioceptive student:
+#    python -m h1_rl.train   --config config/h1_walk_teacher.yaml --run-name teacher
+#    python -m h1_rl.distill --teacher logs/h1_walk/teacher/model_4000.pt
+# =============================================================================
+base: h1_walk.yaml
+
+ppo:
+  privileged_actor: true
+  max_iterations: 4000

@@ -49,6 +49,9 @@ GATES = {
     "stop/failure_rate": ("<=", 0.05),
     "stand/fall_rate_noise": ("<=", 0.03),
     "stand/fall_rate_random": ("<=", 0.03),
+    # a corrective step now and then while standing is fine and even desirable; this gate
+    # exists to catch a trigger so eager that the robot marches in place (measured at 99.8%)
+    "stand/restless_fraction": ("<=", 0.05),
     "push/walking_survival_rate": (">=", 0.75),
 }
 
@@ -160,18 +163,20 @@ def _stand_batch(policy_path, cfg, num_envs, seconds, randomize, noise, seed):
     obs, _ = env.reset_all()
     env.cmd_target[:] = env.commands[:] = [0.5, 0.0, 0.0]
     settle = int(3.0 / env.dt)
-    falls = 0
+    falls, restless, ticks = 0, 0, 0
     for t in range(settle + int(seconds / env.dt)):
         if t == settle:
             env.cmd_target[:] = 0.0
         obs, _, _, done, info = env.step(policy(obs))
-        if t >= settle:
+        if t >= settle + int(1.0 / env.dt):   # after the last step has been finished
             falls += int(info["terminated"].sum())
+            restless += int(np.sum(env.clock.recovery > 0))
+            ticks += env.num_envs
         ids = np.nonzero(done)[0]
         if len(ids):
             env.cmd_target[ids] = 0.0 if t >= settle else [0.5, 0.0, 0.0]
     env.close()
-    return falls
+    return falls, restless / max(ticks, 1)
 
 
 def suite_stand(policy_path, config_path, quick=False, jobs=1, seed=0):
@@ -182,10 +187,12 @@ def suite_stand(policy_path, config_path, quick=False, jobs=1, seed=0):
     seconds = size("stand_seconds", quick)
     out = {}
     for name, randomize, noise in (("noise", False, True), ("random", True, False)):
-        falls = sum(_stand_batch(policy_path, cfg, n_env, seconds, randomize, noise,
-                                 seed + 51 + i) for i in range(seeds))
+        runs = [_stand_batch(policy_path, cfg, n_env, seconds, randomize, noise, seed + 51 + i)
+                for i in range(seeds)]
+        falls = sum(r[0] for r in runs)
         robots = seeds * n_env
-        out[name] = {"robots": robots, "falls": falls, "seconds": seconds}
+        out[name] = {"robots": robots, "falls": falls, "seconds": seconds,
+                     "restless": float(np.mean([r[1] for r in runs]))}
     return {
         "variants": out,
         "metrics": {
@@ -194,6 +201,8 @@ def suite_stand(policy_path, config_path, quick=False, jobs=1, seed=0):
             "falls_random": float(out["random"]["falls"]),
             "fall_rate_noise": out["noise"]["falls"] / max(out["noise"]["robots"], 1),
             "fall_rate_random": out["random"]["falls"] / max(out["random"]["robots"], 1),
+            # fraction of quiet standing time spent stepping: false recovery triggers
+            "restless_fraction": max(out["noise"]["restless"], out["random"]["restless"]),
         },
     }
 
@@ -327,6 +336,8 @@ def render_markdown(report):
         for name, v in s["stand"]["variants"].items():
             label = "sensor noise" if name == "noise" else "randomized dynamics"
             out.append(f"| {label}, {v['seconds']:.0f} s | {v['falls']} / {v['robots']} robots |")
+        out.append(f"\nstepping during quiet standing (false recovery triggers): "
+                   f"{report['metrics']['stand/restless_fraction']:.2%} of the time")
         out.append("")
     if "push" in s:
         out += ["## Push recovery", "", "| case | survived |", "|---|---|"]

@@ -178,6 +178,22 @@ command restarts it. Combined with acceleration-limited commands, the robot alwa
 left to brake with. Penalizing motion while standing was tried and made it *worse* — the policy
 needs those small ankle/hip corrections to stay upright.
 
+**Recovery steps.** A stopped clock means no stepping, and a hard enough shove then tips the robot
+over. So a disturbance restarts the clock for 0.4 s — one half cycle — after which it stops in
+double support again on its own. The trigger is the interesting part: a standing H1 holds a tilt of
+its own (|gravity_xy| ≈ 0.065) that drifts, so an absolute angle either fires constantly or never
+fires. Comparing the tilt against a slow moving average separates cleanly — quiet standing stays
+under 0.075, a 0.4 m/s shove reaches 0.28:
+
+| trigger | standing shoves survived | stepping while standing quietly |
+|---|---|---|
+| none (clock stays stopped) | 10 / 24 | 0% |
+| absolute tilt > 0.10 | 13 / 24 | 99.8% — marches in place |
+| **Δtilt vs slow average > 0.09** | **13 / 24** | **1.5%** |
+
+The trainer and the deployed controller run the same detector on the same IMU signals, so their
+gait clocks stay identical — a test asserts that tick by tick.
+
 **Observations** (41 values × last 5 frames): IMU angular velocity, gravity direction, command,
 leg joint angles and velocities, previous action, gait clock (sin/cos). No ground-truth velocity
 — the critic gets that as privileged information, the actor never does.
@@ -213,6 +229,11 @@ Humanoid-Gym. Randomization: friction 0.4–1.25, pelvis mass −1…+3 kg, CoM 
 | `src/h1_rl/h1_rl/controller.py` | The deployed controller (pure NumPy, no ROS, no PyTorch) |
 | `src/h1_rl/h1_rl/eval.py` | Evaluation suites behind the results table, with CI gates |
 | `src/h1_rl/h1_rl/bench.py` | Throughput benchmark: envs × threads, PPO update, run estimate |
+| `src/h1_rl/h1_rl/terrain.py` | Periodic height-field patches for the rough-terrain curriculum |
+| `src/h1_rl/h1_rl/distill.py` | DAgger distillation of a privileged teacher into a blind student |
+| `src/h1_rl/config/h1_walk_arms.yaml` | Variant: all 19 joints in the action space |
+| `src/h1_rl/config/h1_walk_terrain.yaml` | Variant: blind rough terrain with a curriculum |
+| `src/h1_rl/config/h1_walk_teacher.yaml` | Variant: privileged actor, to be distilled |
 | `src/h1_rl/h1_rl/nodes/` | ROS 2 nodes: `mujoco_sim`, `policy_controller`, `cmd_vel_demo` |
 | `src/h1_rl/models/h1/` | H1 MuJoCo model, URDF for RViz, meshes |
 | `src/h1_rl/policies/h1_walk.npz` | Pretrained policy used by default (weights + training settings) |
@@ -267,14 +288,47 @@ python -m h1_rl.eval --policy logs/h1_walk/<run>/policy_latest.npz \
 
 **Tests** (no ROS needed): `pytest` from the repo root, or `cd src/h1_rl && python -m pytest test -q`.
 
+## Training variants
+
+The shipped policy drives the legs on flat ground. Three variants reuse the same environment,
+controller, tests and evaluation — each is one config file:
+
+```bash
+cd src/h1_rl
+python -m h1_rl.train --config config/h1_walk_arms.yaml       # 19 joints: legs, torso, arms
+python -m h1_rl.train --config config/h1_walk_terrain.yaml    # blind rough terrain
+python -m h1_rl.train --config config/h1_walk_teacher.yaml --run-name teacher   # privileged
+python -m h1_rl.distill --teacher logs/h1_walk/teacher/model_4000.pt            # ...then distil
+```
+
+**Whole body** (`h1_walk_arms.yaml`). The action space becomes all 19 joints, and the stepping
+reference gains an arm swing: the opposite arm goes forward with each leg, which is what the sign
+of `shoulder_pitch` and `hip_pitch` in the H1 model works out to. An upper-body term keeps the
+torso and arms near that reference instead of flailing. The adaptive learning rate compares a KL
+that is *summed over action dimensions*, so `desired_kl` is raised with the action count.
+
+**Rough terrain** (`h1_walk_terrain.yaml`). Every robot gets its own height field — smooth noise,
+waves or blocky steps — with a ten-step curriculum that promotes a robot when it covers the
+distance it was asked to and demotes it when it falls early. The patches are **periodic**: a robot
+that walks past the edge is moved back by exactly one period, and the ground under its feet does
+not change, so a 20 s episode does not need a 20 m terrain. Base height, foot clearance and the
+fall test are all measured against the ground under the robot, and the critic gets a privileged
+3×3 height scan while the actor stays blind.
+
+**Teacher and student** (`h1_walk_teacher.yaml` + `h1_rl.distill`). `ppo.privileged_actor` hands
+the actor the same simulator state the critic sees — true base velocity, contacts, friction, added
+mass, terrain scan — which learns faster but cannot run on a robot. `h1_rl.distill` then trains a
+proprioceptive student on the states the *student* visits, with the teacher labelling each one
+(DAgger), and writes an ordinary checkpoint that `h1_rl.export`, `h1_rl.eval` and the ROS 2
+controller all accept unchanged.
+
 ## Roadmap
 
-- **Recovery steps while standing** — let a hard shove restart the gait clock so the robot can
-  step to catch itself instead of relying on ankles and hips alone.
-- **Arms and torso** in the action space (currently held at their default pose).
-- **Rough terrain** — height field in `scene.xml` plus a terrain curriculum.
+- **Train the variants above to convergence** — the code and the curricula are in, the long runs
+  are not (roughly 40 minutes each per 40M steps on a recent laptop CPU).
 - **Benchmark against Unitree's pretrained H1 policy** in this same simulator.
 - **`unitree_ros2` bridge** — `h1_msgs/JointCommand` already mirrors `LowCmd`.
+- **Stairs with a fixed rise** rather than the blocky steps the generator makes today.
 
 ## Before you try this on a real H1
 

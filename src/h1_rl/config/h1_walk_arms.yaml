@@ -1,0 +1,42 @@
+# =============================================================================
+#  Unitree H1 - whole-body walking: the policy drives all 19 joints.
+#  Everything not listed here comes from h1_walk.yaml.
+#    python -m h1_rl.train --config config/h1_walk_arms.yaml
+# =============================================================================
+base: h1_walk.yaml
+
+robot:
+  policy_joints:            # legs, torso and both arms
+    - left_hip_yaw_joint
+    - left_hip_roll_joint
+    - left_hip_pitch_joint
+    - left_knee_joint
+    - left_ankle_joint
+    - right_hip_yaw_joint
+    - right_hip_roll_joint
+    - right_hip_pitch_joint
+    - right_knee_joint
+    - right_ankle_joint
+    - torso_joint
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+
+gait:
+  arm_swing: 0.6            # the opposite arm swings forward with each step (x ref_amplitude)
+
+rewards:
+  scales:
+    upper_pos: -0.4         # torso and arms stay near the reference instead of flailing
+
+ppo:
+  # The adaptive learning rate compares a KL that is summed over action dimensions, so it
+  # grows with the size of the action space: 19 joints need ~1.9x the budget of 10 to allow
+  # the same change per joint.
+  desired_kl: 0.02
+  init_noise_std: 0.6       # smaller per-joint exploration keeps 19 joints from thrashing

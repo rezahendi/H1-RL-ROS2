@@ -1,0 +1,34 @@
+# =============================================================================
+#  Unitree H1 - blind rough-terrain walking. Everything not listed here comes
+#  from h1_walk.yaml.
+#    python -m h1_rl.train --config config/h1_walk_terrain.yaml
+# =============================================================================
+base: h1_walk.yaml
+
+sim:
+  scene: scene_terrain.xml
+
+terrain:
+  enable: true
+  kinds: [flat, rough, waves, steps]
+  patch: 12.0               # [m] period of each robot's height field
+  amplitude: 0.12           # [m] roughness at the top level
+  levels: 10                # curriculum steps
+  start_level: 1
+  promote_distance: 0.7     # walk this fraction of the commanded distance to level up
+  wrap_radius: 4.0          # [m] from the patch centre before the robot is wrapped
+
+commands:
+  lin_vel_x: [-0.5, 0.8]    # a little gentler than on flat ground
+  ang_vel_yaw: [-0.8, 0.8]
+
+rewards:
+  scales:
+    feet_swing_height: -10.0   # half the flat-ground penalty: feet must clear obstacles
+    base_height: -5.0
+
+domain_rand:
+  friction: [0.3, 1.25]
+
+ppo:
+  max_iterations: 12000

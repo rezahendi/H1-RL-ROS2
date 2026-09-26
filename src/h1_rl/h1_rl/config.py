@@ -73,12 +73,26 @@ def _parse_override(item: str) -> tuple[list[str], Any]:
     return key.strip().split("."), yaml.safe_load(value)
 
 
+def _read_config(path: Path, seen: tuple = ()) -> dict:
+    """Read one YAML file, resolving a `base:` file underneath it first."""
+    if str(path) in seen:
+        raise ValueError(f"config inheritance loop at {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    base = cfg.pop("base", None)
+    if base:
+        base_path = path.parent / base
+        if not base_path.exists():
+            base_path = resolve_path(base)
+        cfg = deep_update(_read_config(base_path, seen + (str(path),)), cfg)
+    return cfg
+
+
 def load_config(path: str | os.PathLike | None = None,
                 overrides: Iterable[str] | None = None) -> dict:
-    """Load the YAML config, then apply 'a.b.c=value' overrides."""
+    """Load the YAML config (following `base:`), then apply 'a.b.c=value' overrides."""
     cfg_path = resolve_path(path or DEFAULT_CONFIG)
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = _read_config(cfg_path)
     for item in overrides or []:
         keys, value = _parse_override(item)
         node = cfg

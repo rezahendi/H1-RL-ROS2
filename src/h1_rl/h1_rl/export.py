@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .obs import FRAME_DIM, ObsScales
+from .obs import ObsScales, frame_dim
 from .robot import RobotSpec
 
 
@@ -37,12 +37,14 @@ def policy_meta(cfg: dict, iteration: int | None = None) -> dict:
         "action_scale": float(cfg["control"]["action_scale"]),
         "action_clip": float(cfg["control"]["action_clip"]),
         "obs_scales": ObsScales(cfg).to_dict(),
-        "frame_dim": FRAME_DIM,
+        "frame_dim": frame_dim(len(robot.policy_joints)),
         "history_length": int(cfg["observations"]["history_length"]),
         "gait": {k: float(cfg["gait"][k]) for k in ("period", "offset", "stance_ratio", "swing_height")},
         "ref_amplitude": float(cfg["gait"].get("ref_amplitude", 0.0)),
+        "arm_swing": float(cfg["gait"].get("arm_swing", 0.0)),
         "residual_reference": bool(cfg["control"].get("residual_reference", False)),
         "stand_when_idle": bool(cfg["gait"].get("stand_when_idle", False)),
+        "recovery": {k: float(v) for k, v in (cfg["gait"].get("recovery") or {}).items()},
         "commands": {**{k: list(map(float, cfg["commands"][k])) for k in ("lin_vel_x", "lin_vel_y", "ang_vel_yaw")},
                      "small_cmd_threshold": float(cfg["commands"].get("small_cmd_threshold", 0.0)),
                      "small_yaw_threshold": float(cfg["commands"].get("small_yaw_threshold", 0.0)),
@@ -51,11 +53,23 @@ def policy_meta(cfg: dict, iteration: int | None = None) -> dict:
     }
 
 
-def export_checkpoint(checkpoint: str | Path, output: str | Path) -> Path:
+def export_checkpoint(checkpoint: str | Path, output: str | Path, config=None) -> Path:
+    """`config` re-exports the same weights with a different config file. Only deployment-side
+    settings may differ (e.g. the recovery thresholds); anything that changes the observations
+    or the action mapping would make the policy behave differently than it was trained."""
     import torch  # only needed here
+
+    from .config import load_config
 
     ck = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
+    if config is not None:
+        new_cfg = load_config(config)
+        keys = ("control", "observations", "gait", "commands", "robot")
+        changed = [k for k in keys if new_cfg.get(k) != cfg.get(k)]
+        if changed:
+            print(f"[export] warning: {', '.join(changed)} differ from the training config")
+        cfg = new_cfg
     state = ck["policy"]
     layer_ids = sorted({int(k.split(".")[1]) for k in state if k.startswith("actor.") and k.endswith(".weight")})
     arrays = {}
@@ -81,8 +95,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--output", default="h1_walk.npz")
+    ap.add_argument("--config", default=None,
+                    help="re-export with this config (deployment settings only)")
     args = ap.parse_args()
-    out = export_checkpoint(args.checkpoint, args.output)
+    out = export_checkpoint(args.checkpoint, args.output, args.config)
     print(f"Exported policy to {out}")
 
 
