@@ -5,6 +5,8 @@
     python3 -m h1_rl.play --headless               # scripted test, prints tracking errors
     python3 -m h1_rl.play --headless --video walk.mp4     # (no display: MUJOCO_GL=egl)
 
+    python3 -m h1_rl.play --config config/h1_walk_terrain.yaml --terrain-level 5   # rough ground
+
 Viewer keys:  Up/Down = forward speed,  Left/Right = turn rate,
               PageUp/PageDown = sideways speed,  Home = stop,  End = reset robot
 """
@@ -16,8 +18,10 @@ import time
 
 import numpy as np
 
+from . import terrain as terrain_mod
 from .config import load_config, resolve_path
 from .controller import FALLEN, PolicyController
+from .robot import foot_geom_ids, place_on_ground
 from .sim import H1Sim
 
 DEFAULT_POLICY = "policies/h1_walk.npz"
@@ -80,7 +84,33 @@ def run_script(sim: H1Sim, ctrl: PolicyController, script, latency_steps: int = 
             "mean_abs_error": np.nanmean(err, axis=0).tolist() if len(err) else None}
 
 
-def interactive(sim: H1Sim, ctrl: PolicyController) -> None:
+def make_terrain(sim: H1Sim, cfg: dict, level: int, kind: str, seed: int):
+    """Fill the scene's height field and return a respawn function that lands on it."""
+    import mujoco
+
+    m = sim.model
+    if m.nhfield == 0:
+        raise SystemExit("this scene has no height field: use --config config/h1_walk_terrain.yaml")
+    tcfg = cfg["terrain"]
+    n, patch = int(m.hfield_nrow[0]), float(tcfg["patch"])
+    fraction = level / max(int(tcfg["levels"]), 1)
+    height = terrain_mod.generate(np.random.default_rng(seed), n, fraction, kind,
+                                  float(tcfg["amplitude"]))
+    terrain_mod.write_to_model(m, height, float(m.hfield_size[0][2]))
+    feet = foot_geom_ids(m)
+    print(f"terrain: {kind}, level {level}/{tcfg['levels']} -> relief 0..{height.max():.3f} m")
+
+    def respawn(support: bool = False) -> None:
+        sim.reset(support=support)
+        d = sim.data
+        place_on_ground(m, d, feet)
+        d.qpos[2] += terrain_mod.sample(height, patch, d.qpos[0], d.qpos[1]) + 0.01
+        mujoco.mj_forward(m, d)
+
+    return respawn
+
+
+def interactive(sim: H1Sim, ctrl: PolicyController, respawn=None) -> None:
     import mujoco.viewer
 
     cmd = np.zeros(3)
@@ -114,7 +144,7 @@ def interactive(sim: H1Sim, ctrl: PolicyController) -> None:
         next_t = time.perf_counter()
         while viewer.is_running():
             if reset_flag[0] or sim.fallen(0.3):
-                sim.reset(support=False)
+                (respawn or sim.reset)(support=False)
                 ctrl.reset()
                 reset_flag[0] = False
             with viewer.lock():
@@ -140,17 +170,25 @@ def main() -> None:
     ap.add_argument("--video", default=None, help="save an mp4/gif of the scripted test")
     ap.add_argument("--latency-steps", type=int, default=0, help="physics steps of actuation delay (0-3)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--terrain-level", type=int, default=0,
+                    help="0 = as configured; 1-10 fills the height field at that level")
+    ap.add_argument("--terrain-kind", default="rough", help="rough | waves | steps | flat")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     policy_path = resolve_path(args.policy)
     ctrl = PolicyController(str(policy_path))
     sim = H1Sim(cfg, visual=True)
-    sim.reset(support=False)
+    respawn = None
+    if args.terrain_level > 0:
+        respawn = make_terrain(sim, cfg, args.terrain_level, args.terrain_kind, args.seed)
+        respawn(support=False)
+    else:
+        sim.reset(support=False)
     print(f"policy: {policy_path} (trained {ctrl.meta.get('iteration')} iterations)")
 
     if not args.headless and not args.video:
-        interactive(sim, ctrl)
+        interactive(sim, ctrl, respawn)
         return
 
     renderer, frames = None, None

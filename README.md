@@ -113,8 +113,15 @@ ros2 service call /mujoco_sim/reset std_srvs/srv/Trigger  # put the robot back o
 Without ROS at all (MuJoCo viewer, arrow keys drive the robot):
 
 ```bash
-cd src/h1_rl && python -m h1_rl.play
+cd src/h1_rl
+python -m h1_rl.play                                                   # flat ground
+python -m h1_rl.play --config config/h1_walk_terrain.yaml --terrain-level 5   # rough ground
 ```
+
+`Up`/`Down` change forward speed, `Left`/`Right` the turn rate, `PageUp`/`PageDown` sideways,
+`Home` stops (watch it settle into a still stance), `End` puts a fallen robot back on its feet.
+Drag with the mouse to orbit; Ctrl+right-drag shoves the robot, which is the quickest way to see
+a recovery step.
 
 At start-up the simulator holds the pelvis in a virtual **support band** (like Unitree's elastic
 band) and releases it on the first `/joint_commands` message. If the robot falls, the controller
@@ -146,13 +153,40 @@ robot spends **0.00%** of it stepping.
 flat-ground walking — better tracking in all three axes, 12/12 instead of 8/12 survival of a
 0.4 m/s shove while standing, and no shuffling at all. The cost is the top of the speed range: the
 terrain curriculum trains commands to 0.8 m/s rather than 1.0, so a 1.0 m/s command now yields
-about 0.71 m/s where the flat-trained policy managed 0.89. On its own terrain it passes every gate
-with even tighter tracking (vx 0.032, yaw 0.018).
+about 0.71 m/s where the flat-trained policy managed 0.89.
 
 Shoved while standing it takes a recovery step rather than relying on ankles and hips alone (see
 [Recovery steps](#how-it-works)); shoved while walking it survived every trial. The randomized
 figure is the mean of four seeds — a single run of that suite scatters between 1 and 5 falls, which
 is worth knowing before reading anything into one number.
+
+### On rough terrain
+
+<p align="center">
+  <img src="docs/demo_terrain.gif" width="420" alt="H1 walking blind across a generated height field">
+</p>
+
+Blind — the policy sees no height map, only its own IMU and joint encoders.
+`python -m h1_rl.eval --config config/h1_walk_terrain.yaml --suite terrain` walks 16 robots for
+15 s at 0.5 m/s with randomized dynamics and sensor noise:
+
+| curriculum level | relief | falls per robot-minute |
+|---|---|---|
+| plane (the flat scene) | — | **0.00** |
+| 0 / 10 — *flat height field* | 0.000 m | 0.75 |
+| 1 / 10 | 0.012 m | 1.00 |
+| 5 / 10 | 0.060 m | 1.50 |
+| 10 / 10 | 0.120 m | 3.25 |
+
+Read that table carefully, because the interesting row is the flat one. A height field with **zero
+relief** already costs 0.75 falls per robot-minute where a plane costs none — MuJoCo resolves
+height-field contacts differently from plane contacts, and most of the difficulty the robot faces
+here is that, not the bumps. Relief on top roughly doubles it again at full difficulty.
+
+So: it walks blind over rough ground, and it is measurably less reliable there than on flat ground.
+An earlier version of this README claimed it "passes every gate on rough terrain" — that was
+measured with the curriculum at level 1, near-flat, using suites that mostly stand and stop. The
+table above is what walking across it actually costs.
 
 <p align="center"><img src="docs/training.png" width="860" alt="PPO training curves"></p>
 
