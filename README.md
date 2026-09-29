@@ -14,12 +14,13 @@
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" width="620" alt="H1 walking, stopping and turning on velocity commands in MuJoCo">
+  <img src="docs/demo_terrain.gif" width="620" alt="H1 walking blind across a generated height field in MuJoCo">
 </p>
 
 <p align="center"><sub>
-  Real time, no cuts. <code>cmd</code> is the velocity command, <code>meas</code> the measured base velocity.
-  <a href="docs/demo.mp4">Full clip (18 s, includes walk + turn and sideways stepping)</a>.
+  Real time, no cuts. Blind: the policy sees no height map, only its own IMU and joint encoders.
+  <code>cmd</code> is the velocity command, <code>meas</code> the measured base velocity.
+  <a href="docs/demo_terrain.mp4">Full clip</a> · <a href="docs/demo.mp4">same policy on flat ground</a>.
 </sub></p>
 
 ---
@@ -136,6 +137,12 @@ a minute on two cores. The full report is committed at
 [docs/eval_report.md](docs/eval_report.md), and CI runs `--quick --check` of the same suites on
 every push, so a regression fails the build instead of quietly shipping.
 
+<p align="center">
+  <img src="docs/demo.gif" width="470" alt="H1 walking, stopping and turning on flat ground">
+</p>
+
+<p align="center"><sub>The same policy on flat ground: walk, stop into a still stance, turn in place.</sub></p>
+
 | Command | Achieved | | Robustness suite | Result |
 |---|---|---|---|---|
 | forward 0.5 m/s | 0.43 m/s | | stop from 0.3–1.0 m/s × 12 gait phases | **0 / 48 failures** |
@@ -162,31 +169,32 @@ is worth knowing before reading anything into one number.
 
 ### On rough terrain
 
-<p align="center">
-  <img src="docs/demo_terrain.gif" width="420" alt="H1 walking blind across a generated height field">
-</p>
-
-Blind — the policy sees no height map, only its own IMU and joint encoders.
+The clip at the top of this page is the height field at curriculum level 5.
 `python -m h1_rl.eval --config config/h1_walk_terrain.yaml --suite terrain` walks 16 robots for
 15 s at 0.5 m/s with randomized dynamics and sensor noise:
 
-| curriculum level | relief | falls per robot-minute |
-|---|---|---|
-| plane (the flat scene) | — | **0.00** |
-| 0 / 10 — *flat height field* | 0.000 m | 0.75 |
-| 1 / 10 | 0.012 m | 1.00 |
-| 5 / 10 | 0.060 m | 1.50 |
-| 10 / 10 | 0.120 m | 3.25 |
+| curriculum level | relief | falls per robot-minute | achieved speed (0.5 m/s asked) |
+|---|---|---|---|
+| plane (the flat scene) | — | **0.00** | 0.43 m/s |
+| 0 / 10 — *flat height field* | 0.000 m | 0.75 | 0.43 m/s |
+| 1 / 10 | 0.012 m | 1.00 | 0.42 m/s |
+| 5 / 10 | 0.060 m | 1.50 | 0.32 m/s |
+| 10 / 10 | 0.120 m | 3.25 | 0.19 m/s |
 
 Read that table carefully, because the interesting row is the flat one. A height field with **zero
 relief** already costs 0.75 falls per robot-minute where a plane costs none — MuJoCo resolves
 height-field contacts differently from plane contacts, and most of the difficulty the robot faces
 here is that, not the bumps. Relief on top roughly doubles it again at full difficulty.
 
-So: it walks blind over rough ground, and it is measurably less reliable there than on flat ground.
-An earlier version of this README claimed it "passes every gate on rough terrain" — that was
-measured with the curriculum at level 1, near-flat, using suites that mostly stand and stop. The
-table above is what walking across it actually costs.
+The speed column is the other half of the price. The robot does not refuse hard terrain — at full
+difficulty it stays upright through most of a run — but it slows to 0.19 m/s against a 0.5 m/s
+command, picking its way rather than walking. Watch a level-10 run and that is exactly what it
+looks like.
+
+So: it walks blind over rough ground, and it is measurably slower and less reliable there than on
+flat ground. An earlier version of this README claimed it "passes every gate on rough terrain" —
+that was measured with the curriculum at level 1, near-flat, using suites that mostly stand and
+stop. The table above is what crossing it actually costs.
 
 <p align="center"><img src="docs/training.png" width="860" alt="PPO training curves"></p>
 

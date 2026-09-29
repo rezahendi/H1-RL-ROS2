@@ -38,7 +38,7 @@ from .policy import Policy
 from .sim import H1Sim
 
 DEFAULT_POLICY = "policies/h1_walk.npz"
-SUITES = ("track", "stop", "stand", "push", "robust")
+SUITES = ("track", "stop", "stand", "push", "robust", "terrain")
 
 # Pass/fail gates. Rates, not counts, so they hold in --quick mode as well.
 GATES = {
@@ -66,6 +66,9 @@ SIZES = {
     "push_speeds": ([0.4, 0.8], [0.8]),
     "robust_envs": (64, 16),
     "robust_seconds": (20.0, 5.0),
+    "terrain_envs": (16, 8),
+    "terrain_seconds": (15.0, 5.0),
+    "terrain_levels": ([1, 5, 10], [5]),
 }
 
 
@@ -260,8 +263,47 @@ def suite_robust(policy_path, config_path, quick=False, jobs=1, seed=0):
     }
 
 
+def suite_terrain(policy_path, config_path, quick=False, jobs=1, seed=0):
+    """Walking on height fields, by curriculum level. Skipped unless the config enables terrain.
+
+    Worth knowing before reading the numbers: a height field is harder for the H1 than a plane
+    even with zero relief, because MuJoCo resolves height-field contacts differently. Level 0 is
+    included as that control.
+    """
+    cfg = load_config(config_path)
+    if not (cfg.get("terrain") or {}).get("enable"):
+        return {"skipped": "config has no terrain", "metrics": {}}
+    n_env = size("terrain_envs", quick)
+    seconds = size("terrain_seconds", quick)
+    rows, metrics = {}, {}
+    for level in [0] + size("terrain_levels", quick):
+        c = copy.deepcopy(cfg)
+        c["terrain"]["start_level"] = level
+        c["commands"]["resample_interval_s"] = [1e4, 1e4]
+        env = H1WalkEnv(c, n_env, seed=seed + 5, randomize=True, obs_noise=True, pushes=False)
+        policy = Policy(policy_path)
+        obs, _ = env.reset_all()
+        env.cmd_target[:] = env.commands[:] = [0.5, 0.0, 0.0]
+        falls, speed = 0, []
+        settle = int(2.0 / env.dt)
+        for t in range(int(seconds / env.dt)):
+            obs, _, _, _, info = env.step(policy(obs))
+            falls += int(info["terminated"].sum())
+            if t > settle:
+                speed.append(float(np.mean(env.base_lin_vel[:, 0])))
+        env.close()
+        minutes = n_env * seconds / 60.0
+        amplitude = float(cfg["terrain"]["amplitude"]) * level / max(int(cfg["terrain"]["levels"]), 1)
+        achieved = float(np.mean(speed)) if speed else 0.0
+        rows[level] = {"falls": falls, "robot_minutes": minutes, "amplitude_m": round(amplitude, 3),
+                       "achieved_vx": round(achieved, 3)}
+        metrics[f"falls_per_robot_minute_L{level}"] = falls / minutes
+        metrics[f"achieved_vx_L{level}"] = achieved
+    return {"levels": rows, "seconds": seconds, "robots": n_env, "metrics": metrics}
+
+
 RUNNERS = {"track": suite_track, "stop": suite_stop, "stand": suite_stand,
-           "push": suite_push, "robust": suite_robust}
+           "push": suite_push, "robust": suite_robust, "terrain": suite_terrain}
 
 
 # --------------------------------------------------------------------------- report
@@ -352,6 +394,18 @@ def render_markdown(report):
                 f"noise and pushes: {r['falls']} falls "
                 f"({m['robust/falls_per_robot_minute']:.2f} per robot-minute), "
                 f"mean |v_xy error| {m['robust/tracking_error_xy']:.3f} m/s", ""]
+    if "terrain" in s and not s["terrain"].get("skipped"):
+        t = s["terrain"]
+        out += ["## Walking on terrain", "",
+                f"{t['robots']} robots x {t['seconds']:.0f} s at 0.5 m/s, randomized dynamics and "
+                f"sensor noise, no pushes:", "",
+                "| curriculum level | relief | falls per robot-minute | achieved speed (0.5 m/s asked) |",
+                "|---|---|---|---|"]
+        for level, v in t["levels"].items():
+            label = f"{level} / 10" + (" (flat height field)" if level == 0 else "")
+            out.append(f"| {label} | {v['amplitude_m']:.3f} m | "
+                       f"{v['falls'] / v['robot_minutes']:.2f} | {v.get('achieved_vx', 0):.2f} m/s |")
+        out.append("")
     gates = check_gates(report["metrics"])
     if gates:
         out += ["## Gates", "", "| metric | value | limit | |", "|---|---|---|---|"]
