@@ -131,21 +131,28 @@ every push, so a regression fails the build instead of quietly shipping.
 
 | Command | Achieved | | Robustness suite | Result |
 |---|---|---|---|---|
-| forward 0.5 m/s | 0.47 m/s | | stop from 0.3–1.0 m/s × 12 gait phases | **0 / 48 failures** |
-| forward 1.0 m/s | 0.89 m/s | | stand 12 s, sensor noise | 4 falls / 192 robots |
-| backward 0.5 m/s | 0.40 m/s | | stand 12 s, randomized dynamics | **0 falls / 192** |
-| sideways ±0.4 m/s | ±0.29 m/s | | 0.4 and 0.8 m/s shove while walking | **12/12** and **12/12** |
-| turn 0.8 rad/s | 0.70 rad/s | | 0.4 and 0.8 m/s shove while standing | 7/12 and 3/12 |
-| zero | motionless, both feet down | | 20 s, everything randomized at once | 8 falls / 64 robots |
+| forward 0.5 m/s | 0.43 m/s | | stop from 0.3–1.0 m/s × 12 gait phases | **0 / 48 failures** |
+| forward 0.8 m/s (range limit) | 0.71 m/s | | stand 12 s, sensor noise | **0 falls / 192 robots** |
+| backward 0.5 m/s | 0.45 m/s | | stand 12 s, randomized dynamics | **0 falls / 192** |
+| sideways ±0.4 m/s | ±0.27 m/s | | 0.4 and 0.8 m/s shove while walking | **12/12** and **12/12** |
+| turn 0.8 rad/s | 0.74 rad/s | | 0.4 and 0.8 m/s shove while standing | **12/12** and **8/12** |
+| zero | stands still, both feet down | | 20 s, everything randomized at once | 3 falls / 64 robots |
 
 Mean absolute tracking error across the whole script, with 5 ms of actuation delay and no falls:
-**0.038 m/s** (vx), **0.035 m/s** (vy), **0.042 rad/s** (yaw). The under-tracking at 1.0 m/s is the
-usual behaviour of a velocity-tracking reward at the edge of its trained range.
+**0.037 m/s** (vx), **0.034 m/s** (vy), **0.020 rad/s** (yaw). Quiet standing is exactly that: the
+robot spends **0.00%** of it stepping.
 
-The weak spot is visible in the same table: shoved *while standing*, the robot survives about half
-the 0.4 m/s kicks and a third of the 0.8 m/s ones, because with the gait clock stopped it can only
-answer with ankles and hips — there is no recovery step. Shoved *while walking*, it survived every
-trial.
+**The shipped policy is trained on rough terrain**, and that beats training on flat ground even for
+flat-ground walking — better tracking in all three axes, 12/12 instead of 8/12 survival of a
+0.4 m/s shove while standing, and no shuffling at all. The cost is the top of the speed range: the
+terrain curriculum trains commands to 0.8 m/s rather than 1.0, so a 1.0 m/s command now yields
+about 0.71 m/s where the flat-trained policy managed 0.89. On its own terrain it passes every gate
+with even tighter tracking (vx 0.032, yaw 0.018).
+
+Shoved while standing it takes a recovery step rather than relying on ankles and hips alone (see
+[Recovery steps](#how-it-works)); shoved while walking it survived every trial. The randomized
+figure is the mean of four seeds — a single run of that suite scatters between 1 and 5 falls, which
+is worth knowing before reading anything into one number.
 
 <p align="center"><img src="docs/training.png" width="860" alt="PPO training curves"></p>
 

@@ -166,6 +166,7 @@ rewards:
     contact: 0.4
     ref_joint_pos: 0.5
     stand_still: 0.0         # off: penalizing motion while standing prevents balance corrections
+    recovery: -0.5           # cost of a recovery step at zero command (else it shuffles forever)
 
 ppo:
   num_envs: 128

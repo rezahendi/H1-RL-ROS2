@@ -468,6 +468,8 @@ class H1WalkEnv:
         ep_s = np.maximum(self.episode_step[ids], 1) * self.dt
         stats = {f"rew_{k}": float(np.mean(v[ids] / ep_s)) for k, v in self.episode_sums.items()}
         stats["episode_length_s"] = float(np.mean(self.episode_step[ids] * self.dt))
+        if self.terrain_on:   # how far the curriculum has climbed, averaged over all robots
+            stats["terrain_level"] = float(np.mean(self.level))
         return stats
 
     def _reward_tracking_lin_vel(self):
@@ -537,6 +539,13 @@ class H1WalkEnv:
             return np.zeros(self.num_envs)
         ref = self.default_q[self.upper] + self._reference(self.phase)[:, self.upper_in_action]
         return np.sum((self.q[:, self.upper] - ref) ** 2, axis=1)
+
+    def _reward_recovery(self):
+        """Price the recovery step. Without a cost, a policy trained with the clock restart
+        available never bothers to stand quietly: it triggers forever and shuffles in place
+        (measured at 70-100% of standing time). This charges for the trigger while the command
+        is zero, so the policy keeps its own posture quiet and saves the step for real shoves."""
+        return (self.clock.recovery > 0) & ~is_walking(self.commands)
 
     def _reward_contact(self):
         # +1 per foot whose contact matches the gait clock, -0.3 per mismatch
